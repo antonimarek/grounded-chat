@@ -1,3 +1,5 @@
+import { normalizeTerm, stemVariants } from '../index/normalize';
+
 const STOPWORDS = new Set([
 	'a',
 	'an',
@@ -61,27 +63,59 @@ const STOPWORDS = new Set([
 	'z',
 	'za',
 	'ze',
+	'moje',
+	'moj',
+	'mój',
+	'jakie',
+	'jakis',
+	'jakieś',
+	'moze',
+	'mozesz',
+	'możesz',
+	'powiedz',
+	'powiedziec',
+	'powiedzieć',
+	'szukam',
+	'szukac',
+	'szukać',
 ]);
 
-export function extractSearchTerms(query: string): string[] {
-	const raw = query
-		.toLowerCase()
-		.normalize('NFD')
-		.replace(/\p{M}/gu, '')
+export function extractSearchTerms(text: string): string[] {
+	const raw = text
 		.split(/[\s,.!?;:()[\]"'«»]+/)
-		.map((part) => part.trim())
-		.filter((part) => part.length >= 3 && !STOPWORDS.has(part));
+		.map((part) => normalizeTerm(part))
+		.filter((part) => part.length >= 2 && !STOPWORDS.has(part));
 
 	return [...new Set(raw)];
 }
 
-export function buildSearchQueries(userQuery: string): string[] {
+export function expandSearchTerms(terms: string[]): string[] {
+	const expanded = new Set<string>();
+	for (const term of terms) {
+		for (const variant of stemVariants(term)) {
+			expanded.add(variant);
+		}
+	}
+	return [...expanded];
+}
+
+export function allSearchTerms(userQuery: string, context?: string): string[] {
+	const terms = extractSearchTerms(userQuery);
+	if (context?.trim()) {
+		for (const term of extractSearchTerms(context)) {
+			terms.push(term);
+		}
+	}
+	return expandSearchTerms([...new Set(terms)]);
+}
+
+export function buildSearchQueries(userQuery: string, context?: string): string[] {
 	const trimmed = userQuery.trim();
 	if (!trimmed) {
 		return [];
 	}
 
-	const terms = extractSearchTerms(trimmed);
+	const terms = allSearchTerms(trimmed, context);
 	const queries: string[] = [];
 
 	if (terms.length >= 2) {

@@ -33,12 +33,16 @@ export interface PlanParams {
 	topK: number;
 	activePath: string | null;
 	signal: AbortSignal;
+	onStatus?: (message: string) => void;
 }
 
 export async function planAnswer(params: PlanParams): Promise<PlanResult> {
 	const history = params.history.filter(
 		(message) => message.role === 'user' || message.role === 'assistant',
 	);
+	const context = conversationContext(history);
+
+	params.onStatus?.('Routing…');
 
 	try {
 		const route = await completeChat({
@@ -58,9 +62,11 @@ export async function planAnswer(params: PlanParams): Promise<PlanResult> {
 		if (searchCall) {
 			const query = parseSearchQuery(searchCall.arguments);
 			if (query) {
+				params.onStatus?.('Searching vault…');
 				const evidence = retrieve(params.app, params.lexical, query, {
 					topK: params.topK,
 					activePath: params.activePath,
+					context,
 				});
 				return { mode: 'vault', evidence, searchQuery: query };
 			}
@@ -77,17 +83,18 @@ export async function planAnswer(params: PlanParams): Promise<PlanResult> {
 		return { mode: 'conversation', evidence: [] };
 	} catch (error) {
 		if ((error as OpenRouterError).name === 'OpenRouterError') {
-			return fallbackPlan(params);
+			return fallbackPlan(params, context);
 		}
 		throw error;
 	}
 }
 
-function fallbackPlan(params: PlanParams): PlanResult {
+function fallbackPlan(params: PlanParams, context: string): PlanResult {
 	if (isLikelyFollowUp(params.userMessage, params.history)) {
 		return { mode: 'conversation', evidence: [] };
 	}
 
+	params.onStatus?.('Searching vault…');
 	const evidence = retrieve(
 		params.app,
 		params.lexical,
@@ -95,9 +102,18 @@ function fallbackPlan(params: PlanParams): PlanResult {
 		{
 			topK: params.topK,
 			activePath: params.activePath,
+			context,
 		},
 	);
 	return { mode: 'vault', evidence, searchQuery: params.userMessage };
+}
+
+function conversationContext(history: ChatMessage[]): string {
+	return history
+		.filter((message) => message.role === 'user')
+		.slice(-3)
+		.map((message) => message.content)
+		.join(' ');
 }
 
 function isLikelyFollowUp(

@@ -41,7 +41,7 @@ The plugin is not in the Obsidian Community Plugin directory yet. Install manual
 5. Use **Stop** to cancel a stream.
 6. Optional: **Save last answer to note** command or the download icon on a reply.
 7. Optional: enable **Persist chat** in settings to keep the thread after reload.
-8. Optional: command **Rebuild index** after you change exclude paths.
+8. Optional: command **Rebuild index** after you change exclude paths or update the plugin (search tokenization may change).
 9. Optional: command **Clear chat** to reset the thread.
 
 ## Check it in Obsidian

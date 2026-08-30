@@ -1,5 +1,6 @@
 import MiniSearch from 'minisearch';
 import type { NoteChunk } from './types';
+import { processSearchTerm } from './normalize';
 
 export class LexicalIndex {
 	private searcher: MiniSearch<NoteChunk>;
@@ -93,6 +94,7 @@ export class LexicalIndex {
 			fields: ['title', 'heading', 'text'],
 			storeFields: ['path', 'title', 'heading', 'text', 'hash'],
 			idField: 'id',
+			processTerm: processSearchTerm,
 		});
 	}
 }

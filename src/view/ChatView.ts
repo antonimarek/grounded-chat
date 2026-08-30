@@ -351,6 +351,7 @@ export class ChatView extends ItemView {
 				topK: this.plugin.settings.topK,
 				activePath: this.plugin.activeNotePath(),
 				signal: this.abort.signal,
+				onStatus: (message) => setBubblePlainText(bodyEl, message),
 			});
 
 			planMode = plan.mode;
@@ -383,7 +384,7 @@ export class ChatView extends ItemView {
 					? buildSystemPrompt(plan.evidence)
 					: buildConversationPrompt();
 
-			setBubblePlainText(bodyEl, '');
+			setBubblePlainText(bodyEl, plan.mode === 'vault' ? 'Answering…' : '');
 
 			await streamChat({
 				apiKey: this.plugin.settings.openRouterApiKey,
@@ -596,8 +597,8 @@ export class ChatView extends ItemView {
 		if (mode === 'vault') {
 			if (evidence.length > 0) {
 				label = searchQuery
-					? `Evidence · search: ${searchQuery}`
-					: 'Evidence';
+					? `Evidence (${evidence.length}) · search: ${searchQuery}`
+					: `Evidence (${evidence.length})`;
 			} else {
 				label = 'No matching notes';
 			}

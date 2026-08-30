@@ -10,7 +10,7 @@ export const SEARCH_VAULT_TOOL = {
 				query: {
 					type: 'string',
 					description:
-						'Focused search query with content keywords in the user language. Not the full conversational sentence.',
+						'Focused keyword query in the user language. Use content words from the question and earlier turns when the user refers to a prior topic. Not the full conversational sentence.',
 				},
 			},
 			required: ['query'],

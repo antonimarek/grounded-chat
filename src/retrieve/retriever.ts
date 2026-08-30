@@ -1,20 +1,28 @@
 import type { App } from 'obsidian';
 import type { LexicalIndex } from '../index/lexical';
 import type { RetrievedChunk } from '../index/types';
-import { buildSearchQueries } from './query';
+import { normalizeTerm } from '../index/normalize';
+import { allSearchTerms, buildSearchQueries } from './query';
 
 const NEIGHBOR_CHUNK_CAP = 2;
 const MAX_CHUNKS_PER_NOTE = 2;
+
+export interface RetrieveOptions {
+	topK: number;
+	activePath: string | null;
+	context?: string;
+}
 
 export function retrieve(
 	app: App,
 	lexical: LexicalIndex,
 	query: string,
-	options: { topK: number; activePath: string | null },
+	options: RetrieveOptions,
 ): RetrievedChunk[] {
 	const scored = new Map<string, RetrievedChunk>();
-	const queries = buildSearchQueries(query);
-	const poolSize = Math.max(options.topK * 5, 20);
+	const queries = buildSearchQueries(query, options.context);
+	const terms = allSearchTerms(query, options.context);
+	const poolSize = Math.max(options.topK * 5, 24);
 
 	for (let i = 0; i < queries.length; i++) {
 		const q = queries[i];
@@ -22,16 +30,22 @@ export function retrieve(
 			continue;
 		}
 		const isPrimary = i === 0;
-		const combineWith = isPrimary && q.split(/\s+/).length > 1 ? 'OR' : 'AND';
+		const wordCount = q.split(/\s+/).filter(Boolean).length;
+		const combineWith = wordCount > 1 ? 'OR' : 'AND';
 		const hits = lexical.query(q, poolSize, combineWith);
 
 		for (const hit of hits) {
-			const activeBoost = hit.path === options.activePath ? 1.35 : 1;
-			const queryBoost = isPrimary ? 1 : 0.75;
-			const nextScore = hit.score * activeBoost * queryBoost;
+			const activeBoost = hit.path === options.activePath ? 1.4 : 1;
+			const queryBoost = isPrimary ? 1 : 0.7;
+			const titleBoost = terms.some((term) =>
+				titleMatchesTerm(hit.title, term),
+			)
+				? 1.5
+				: 1;
+			const nextScore = hit.score * activeBoost * queryBoost * titleBoost;
 			const existing = scored.get(hit.id);
 			if (existing) {
-				existing.score = Math.max(existing.score, nextScore) + 0.12;
+				existing.score = Math.max(existing.score, nextScore) + 0.15;
 			} else {
 				scored.set(hit.id, {
 					id: hit.id,
@@ -45,10 +59,12 @@ export function retrieve(
 		}
 	}
 
+	boostTitleMatches(app, lexical, terms, scored);
+
 	const seedPaths = new Set(
 		[...scored.values()]
 			.sort((a, b) => b.score - a.score)
-			.slice(0, 8)
+			.slice(0, 10)
 			.map((hit) => hit.path),
 	);
 	if (options.activePath) {
@@ -62,7 +78,7 @@ export function retrieve(
 				if (scored.has(chunk.id)) {
 					const current = scored.get(chunk.id);
 					if (current) {
-						current.score += 0.15;
+						current.score += 0.2;
 					}
 					continue;
 				}
@@ -72,7 +88,7 @@ export function retrieve(
 					title: chunk.title,
 					heading: chunk.heading,
 					text: chunk.text,
-					score: 0.35,
+					score: 0.4,
 				});
 			}
 		}
@@ -83,6 +99,55 @@ export function retrieve(
 		options.topK,
 		MAX_CHUNKS_PER_NOTE,
 	);
+}
+
+function titleMatchesTerm(title: string, term: string): boolean {
+	const normalizedTitle = normalizeTerm(title);
+	if (!normalizedTitle || !term) {
+		return false;
+	}
+	return (
+		normalizedTitle.includes(term) ||
+		(term.length >= 4 && term.includes(normalizedTitle))
+	);
+}
+
+function boostTitleMatches(
+	app: App,
+	lexical: LexicalIndex,
+	terms: string[],
+	scored: Map<string, RetrievedChunk>,
+): void {
+	if (terms.length === 0) {
+		return;
+	}
+
+	for (const file of app.vault.getMarkdownFiles()) {
+		const matched = terms.filter((term) =>
+			titleMatchesTerm(file.basename, term),
+		);
+		if (matched.length === 0) {
+			continue;
+		}
+
+		const chunks = lexical.chunksForPath(file.path);
+		const titleBoost = 4 + matched.length * 0.75;
+		for (const chunk of chunks.slice(0, MAX_CHUNKS_PER_NOTE)) {
+			const existing = scored.get(chunk.id);
+			if (existing) {
+				existing.score += titleBoost;
+				continue;
+			}
+			scored.set(chunk.id, {
+				id: chunk.id,
+				path: chunk.path,
+				title: chunk.title,
+				heading: chunk.heading,
+				text: chunk.text,
+				score: titleBoost,
+			});
+		}
+	}
 }
 
 function diversifyByPath(
