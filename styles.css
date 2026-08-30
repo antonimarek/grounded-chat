@@ -56,6 +56,48 @@
 	user-select: none;
 }
 
+.gc-meta-label {
+	flex: 1 1 auto;
+}
+
+.gc-status-badge {
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	padding: 1px 6px;
+	border-radius: 4px;
+	line-height: 1.4;
+}
+
+.gc-status-grounded {
+	color: var(--color-green);
+	background-color: rgba(var(--color-green-rgb), 0.12);
+}
+
+.gc-status-partial {
+	color: var(--color-yellow);
+	background-color: rgba(var(--color-yellow-rgb), 0.12);
+}
+
+.gc-status-uncertain {
+	color: var(--color-orange);
+	background-color: rgba(var(--color-orange-rgb), 0.12);
+}
+
+.gc-save-btn {
+	display: inline-flex;
+	margin-left: auto;
+	padding: 2px;
+	border: none;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.gc-save-btn:hover {
+	color: var(--text-normal);
+}
+
 .gc-meta-icon {
 	display: inline-flex;
 	width: 14px;

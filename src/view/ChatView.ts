@@ -1,7 +1,19 @@
-import { HoverPopover, ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
+import { HoverPopover, ItemView, Notice, WorkspaceLeaf, setIcon } from 'obsidian';
 import type GroundedChatPlugin from '../main';
 import type { RetrievedChunk } from '../index/types';
-import { planAnswer } from '../chat/planner';
+import {
+	computeEpistemicStatus,
+	statusLabel,
+	type EpistemicStatus,
+} from '../chat/epistemic';
+import { planAnswer, type AnswerMode } from '../chat/planner';
+import { openSavedAnswer, saveAnswerToVault } from '../chat/save-answer';
+import {
+	slimEvidence,
+	type AssistantTurn,
+	type EvidenceRef,
+	type ThreadMessage,
+} from '../chat/types';
 import { OpenRouterError, streamChat, type ChatMessage } from '../openrouter/client';
 import { buildConversationPrompt, buildSystemPrompt } from '../prompt/builder';
 import { wireInternalLinks } from './link-handler';
@@ -12,15 +24,11 @@ import {
 
 export const VIEW_TYPE_GROUNDED_CHAT = 'grounded-chat';
 
-interface ThreadMessage {
-	role: 'user' | 'assistant';
-	content: string;
-}
-
 export class ChatView extends ItemView {
 	plugin: GroundedChatPlugin;
 	hoverPopover: HoverPopover | null = null;
 	private thread: ThreadMessage[] = [];
+	private lastAssistantTurn: AssistantTurn | null = null;
 	private abort: AbortController | null = null;
 	private streaming = false;
 	private unsubIndex: (() => void) | null = null;
@@ -48,6 +56,30 @@ export class ChatView extends ItemView {
 
 	getIcon(): string {
 		return 'message-square';
+	}
+
+	isEmpty(): boolean {
+		return this.thread.length === 0;
+	}
+
+	hasLastAnswer(): boolean {
+		return this.lastAssistantTurn !== null;
+	}
+
+	async saveLastAnswer(): Promise<void> {
+		if (!this.lastAssistantTurn) {
+			return;
+		}
+		await this.saveTurn(this.lastAssistantTurn);
+	}
+
+	async clearChat(): Promise<void> {
+		this.stop();
+		this.thread = [];
+		this.lastAssistantTurn = null;
+		this.messagesEl.empty();
+		this.renderEmpty();
+		await this.plugin.persistChatThread([]);
 	}
 
 	async onOpen(): Promise<void> {
@@ -94,6 +126,11 @@ export class ChatView extends ItemView {
 		});
 		this.stopBtn.hidden = true;
 		this.stopBtn.addEventListener('click', () => this.stop());
+
+		if (this.plugin.settings.persistChat && this.plugin.chatThread.length > 0) {
+			this.thread = [...this.plugin.chatThread];
+			await this.restoreThread();
+		}
 	}
 
 	async onClose(): Promise<void> {
@@ -153,7 +190,11 @@ export class ChatView extends ItemView {
 			});
 			return;
 		}
-		this.emptyEl.addClass('gc-empty-hidden');
+		if (this.thread.length === 0) {
+			this.emptyEl.removeClass('gc-empty-hidden');
+		} else {
+			this.emptyEl.addClass('gc-empty-hidden');
+		}
 	}
 
 	private stop(): void {
@@ -203,6 +244,65 @@ export class ChatView extends ItemView {
 		this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
 	}
 
+	private async restoreThread(): Promise<void> {
+		for (const message of this.thread) {
+			if (message.role === 'user') {
+				const row = this.appendBubble('user');
+				const body = row.querySelector('.gc-bubble-body') as HTMLElement;
+				await this.renderBubbleBody(body, message.content);
+				continue;
+			}
+
+			const row = this.appendAssistantBubble(message.status ?? null);
+			if (message.mode) {
+				await this.renderEvidence(
+					row,
+					message.evidence ?? [],
+					message.mode,
+					message.searchQuery,
+				);
+			}
+			const body = row.querySelector('.gc-bubble-body') as HTMLElement;
+			await this.renderBubbleBody(body, message.content);
+			this.attachSaveButton(row, message);
+		}
+		this.rebuildLastAssistantTurn();
+		this.renderEmpty();
+	}
+
+	private rebuildLastAssistantTurn(): void {
+		this.lastAssistantTurn = null;
+		for (let i = this.thread.length - 1; i >= 0; i--) {
+			const message = this.thread[i];
+			if (message?.role !== 'assistant') {
+				continue;
+			}
+			const userQuestion = this.findUserQuestionBefore(i);
+			if (!userQuestion || !message.mode) {
+				break;
+			}
+			this.lastAssistantTurn = {
+				userQuestion,
+				content: message.content,
+				mode: message.mode,
+				status: message.status ?? null,
+				searchQuery: message.searchQuery,
+				evidence: message.evidence ?? [],
+			};
+			break;
+		}
+	}
+
+	private findUserQuestionBefore(assistantIndex: number): string | null {
+		for (let i = assistantIndex - 1; i >= 0; i--) {
+			const message = this.thread[i];
+			if (message?.role === 'user') {
+				return message.content;
+			}
+		}
+		return null;
+	}
+
 	private async send(): Promise<void> {
 		if (this.streaming) {
 			return;
@@ -221,19 +321,23 @@ export class ChatView extends ItemView {
 		const userRow = this.appendBubble('user');
 		const userBody = userRow.querySelector('.gc-bubble-body') as HTMLElement;
 		await this.renderBubbleBody(userBody, text);
+		await this.plugin.persistChatThread(this.thread);
 
 		const history: ChatMessage[] = this.thread.map((message) => ({
 			role: message.role,
 			content: message.content,
 		}));
 
-		const assistantRow = this.appendBubble('assistant');
+		const assistantRow = this.appendAssistantBubble(null);
 		const bodyEl = assistantRow.querySelector('.gc-bubble-body') as HTMLElement;
 		setBubblePlainText(bodyEl, 'Thinking…');
 		this.setBusy(true);
 		this.abort = new AbortController();
 
 		let assembled = '';
+		let planMode: AnswerMode = 'conversation';
+		let planEvidence: RetrievedChunk[] = [];
+		let planSearchQuery: string | undefined;
 
 		try {
 			const plan = await planAnswer({
@@ -249,6 +353,10 @@ export class ChatView extends ItemView {
 				signal: this.abort.signal,
 			});
 
+			planMode = plan.mode;
+			planEvidence = plan.evidence;
+			planSearchQuery = plan.searchQuery;
+
 			await this.renderEvidence(
 				assistantRow,
 				plan.evidence,
@@ -258,8 +366,14 @@ export class ChatView extends ItemView {
 
 			if (plan.directAnswer) {
 				assembled = plan.directAnswer;
-				await this.renderBubbleBody(bodyEl, assembled);
-				this.thread.push({ role: 'assistant', content: assembled });
+				await this.finishAssistantMessage(
+					assistantRow,
+					text,
+					assembled,
+					plan.mode,
+					plan.evidence,
+					plan.searchQuery,
+				);
 				return;
 			}
 
@@ -288,15 +402,29 @@ export class ChatView extends ItemView {
 			} else {
 				await this.renderBubbleBody(bodyEl, assembled);
 			}
-			this.thread.push({ role: 'assistant', content: assembled });
+			await this.finishAssistantMessage(
+				assistantRow,
+				text,
+				assembled,
+				planMode,
+				planEvidence,
+				planSearchQuery,
+			);
 		} catch (error) {
 			this.clearStreamRenderTimer();
 			if ((error as Error).name === 'AbortError') {
 				if (assembled) {
-					this.thread.push({ role: 'assistant', content: assembled });
-					await this.renderBubbleBody(bodyEl, assembled);
+					await this.finishAssistantMessage(
+						assistantRow,
+						text,
+						assembled,
+						planMode,
+						planEvidence,
+						planSearchQuery,
+					);
 				} else {
 					setBubblePlainText(bodyEl, '(Stopped)');
+					assistantRow.remove();
 				}
 			} else if (error instanceof OpenRouterError) {
 				setBubblePlainText(bodyEl, `Error ${error.status}: ${error.message}`);
@@ -310,6 +438,43 @@ export class ChatView extends ItemView {
 			this.setBusy(false);
 			this.abort = null;
 		}
+	}
+
+	private async finishAssistantMessage(
+		row: HTMLElement,
+		userQuestion: string,
+		content: string,
+		mode: AnswerMode,
+		evidence: RetrievedChunk[],
+		searchQuery?: string,
+	): Promise<void> {
+		const status = computeEpistemicStatus({
+			mode,
+			evidenceCount: evidence.length,
+			answerText: content,
+		});
+		this.renderStatusBadge(row, status);
+
+		const slim = slimEvidence(evidence);
+		const message: ThreadMessage = {
+			role: 'assistant',
+			content,
+			status: status ?? undefined,
+			mode,
+			searchQuery,
+			evidence: slim,
+		};
+		this.thread.push(message);
+		this.lastAssistantTurn = {
+			userQuestion,
+			content,
+			mode,
+			status,
+			searchQuery,
+			evidence: slim,
+		};
+		this.attachSaveButton(row, message);
+		await this.plugin.persistChatThread(this.thread);
 	}
 
 	private appendBubble(role: 'user' | 'assistant'): HTMLElement {
@@ -329,12 +494,97 @@ export class ChatView extends ItemView {
 		return row;
 	}
 
+	private appendAssistantBubble(status: EpistemicStatus | null): HTMLElement {
+		const row = this.appendBubble('assistant');
+		this.renderStatusBadge(row, status);
+		return row;
+	}
+
+	private renderStatusBadge(
+		row: HTMLElement,
+		status: EpistemicStatus | null,
+	): void {
+		const meta = row.querySelector('.gc-meta');
+		if (!meta) {
+			return;
+		}
+		meta.querySelector('.gc-status-badge')?.remove();
+		if (!status) {
+			return;
+		}
+		meta.createSpan({
+			cls: `gc-status-badge gc-status-${status}`,
+			text: statusLabel(status),
+		});
+	}
+
+	private attachSaveButton(row: HTMLElement, message: ThreadMessage): void {
+		if (message.role !== 'assistant' || !message.content.trim()) {
+			return;
+		}
+		const meta = row.querySelector('.gc-meta');
+		if (!meta || meta.querySelector('.gc-save-btn')) {
+			return;
+		}
+		const btn = meta.createEl('button', {
+			cls: 'gc-save-btn clickable-icon',
+			attr: { 'aria-label': 'Save to note' },
+		});
+		setIcon(btn, 'download');
+		btn.addEventListener('click', () => {
+			const userQuestion = this.findUserQuestionForRow(row);
+			if (!userQuestion) {
+				new Notice('Could not find the question for this answer.');
+				return;
+			}
+			void this.saveTurn({
+				userQuestion,
+				content: message.content,
+				mode: message.mode ?? 'conversation',
+				status: message.status ?? null,
+				searchQuery: message.searchQuery,
+				evidence: message.evidence ?? [],
+			});
+		});
+	}
+
+	private findUserQuestionForRow(row: HTMLElement): string | null {
+		const rows = Array.from(this.messagesEl.querySelectorAll('.gc-row'));
+		const index = rows.indexOf(row);
+		if (index <= 0) {
+			return null;
+		}
+		for (let i = index - 1; i >= 0; i--) {
+			const prior = rows[i];
+			if (prior?.classList.contains('gc-row-user')) {
+				return prior.querySelector('.gc-bubble-body')?.textContent?.trim() ?? null;
+			}
+		}
+		return null;
+	}
+
+	private async saveTurn(turn: AssistantTurn): Promise<void> {
+		try {
+			const file = await saveAnswerToVault(
+				this.app,
+				this.plugin.settings.saveAnswerFolder,
+				turn,
+			);
+			await openSavedAnswer(this.app, file);
+		} catch (error) {
+			new Notice(
+				error instanceof Error ? error.message : 'Could not save answer.',
+			);
+		}
+	}
+
 	private async renderEvidence(
 		row: HTMLElement,
-		evidence: RetrievedChunk[],
+		evidence: EvidenceRef[] | RetrievedChunk[],
 		mode: 'vault' | 'conversation',
 		searchQuery?: string,
 	): Promise<void> {
+		row.querySelector('.gc-evidence')?.remove();
 		const wrap = row.createDiv({ cls: 'gc-evidence' });
 		let label = 'From conversation';
 		if (mode === 'vault') {
@@ -355,11 +605,11 @@ export class ChatView extends ItemView {
 		}
 		const listEl = wrap.createDiv({ cls: 'gc-evidence-list markdown-rendered' });
 		const lines = evidence.map((chunk) => {
-			const label =
+			const chunkLabel =
 				chunk.heading === chunk.title
 					? chunk.title
 					: `${chunk.title} › ${chunk.heading}`;
-			return `- [[${chunk.title}|${label}]]`;
+			return `- [[${chunk.title}|${chunkLabel}]]`;
 		});
 		await renderBubbleMarkdown(
 			this.app,

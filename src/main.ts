@@ -1,4 +1,5 @@
 import { MarkdownView, Plugin } from 'obsidian';
+import type { ThreadMessage } from './chat/types';
 import { VaultIndex } from './index/vault-index';
 import {
 	DEFAULT_SETTINGS,
@@ -10,6 +11,7 @@ import { ChatView, VIEW_TYPE_GROUNDED_CHAT } from './view/ChatView';
 export default class GroundedChatPlugin extends Plugin {
 	settings!: GroundedChatSettings;
 	vaultIndex!: VaultIndex;
+	chatThread: ThreadMessage[] = [];
 
 	async onload() {
 		await this.loadSettings();
@@ -43,10 +45,51 @@ export default class GroundedChatPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: 'save-last-answer',
+			name: 'Save last answer to note',
+			checkCallback: (checking) => {
+				const view = this.getChatView();
+				if (!view?.hasLastAnswer()) {
+					return false;
+				}
+				if (!checking) {
+					void view.saveLastAnswer();
+				}
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: 'clear-chat',
+			name: 'Clear chat',
+			checkCallback: (checking) => {
+				const view = this.getChatView();
+				if (!view || view.isEmpty()) {
+					return false;
+				}
+				if (!checking) {
+					void view.clearChat();
+				}
+				return true;
+			},
+		});
+
 		this.addSettingTab(new GroundedChatSettingTab(this.app, this));
 	}
 
 	onunload() {}
+
+	getChatView(): ChatView | null {
+		for (const leaf of this.app.workspace.getLeavesOfType(
+			VIEW_TYPE_GROUNDED_CHAT,
+		)) {
+			if (leaf.view instanceof ChatView) {
+				return leaf.view;
+			}
+		}
+		return null;
+	}
 
 	activeNotePath(): string | null {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -73,14 +116,43 @@ export default class GroundedChatPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			(await this.loadData()) as Partial<GroundedChatSettings>,
-		);
+		const data = (await this.loadData()) as
+			| (Partial<GroundedChatSettings> & { chatThread?: ThreadMessage[] })
+			| null;
+		const { chatThread, ...settingsData } = data ?? {};
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, settingsData);
+		this.chatThread = Array.isArray(chatThread) ? chatThread : [];
 	}
 
 	async saveSettings() {
-		await this.saveData(this.settings);
+		const data = ((await this.loadData()) ?? {}) as Record<string, unknown>;
+		await this.saveData({
+			...data,
+			...this.settings,
+			chatThread: this.chatThread,
+		});
+	}
+
+	async persistChatThread(thread: ThreadMessage[]): Promise<void> {
+		this.chatThread = thread;
+		if (!this.settings.persistChat) {
+			return;
+		}
+		const data = ((await this.loadData()) ?? {}) as Record<string, unknown>;
+		await this.saveData({
+			...data,
+			...this.settings,
+			chatThread: thread,
+		});
+	}
+
+	async clearChatThread(): Promise<void> {
+		this.chatThread = [];
+		const data = ((await this.loadData()) ?? {}) as Record<string, unknown>;
+		await this.saveData({
+			...data,
+			...this.settings,
+			chatThread: [],
+		});
 	}
 }

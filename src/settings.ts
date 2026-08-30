@@ -7,6 +7,8 @@ export interface GroundedChatSettings {
 	baseUrl: string;
 	topK: number;
 	excludeFolders: string;
+	persistChat: boolean;
+	saveAnswerFolder: string;
 }
 
 export const DEFAULT_SETTINGS: GroundedChatSettings = {
@@ -15,6 +17,8 @@ export const DEFAULT_SETTINGS: GroundedChatSettings = {
 	baseUrl: 'https://openrouter.ai/api/v1',
 	topK: 8,
 	excludeFolders: '',
+	persistChat: false,
+	saveAnswerFolder: 'Grounded Chat/Answers',
 };
 
 export class GroundedChatSettingTab extends PluginSettingTab {
@@ -90,10 +94,38 @@ export class GroundedChatSettingTab extends PluginSettingTab {
 			)
 			.addTextArea((area) =>
 				area
-					.setPlaceholder('copilot')
+					.setPlaceholder('Templates')
 					.setValue(this.plugin.settings.excludeFolders)
 					.onChange(async (value) => {
 						this.plugin.settings.excludeFolders = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Persist chat')
+			.setDesc(
+				'Keep the chat thread when you close the pane or reload Obsidian. Stored in plugin data on this device.',
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.persistChat).onChange(async (value) => {
+					this.plugin.settings.persistChat = value;
+					await this.plugin.saveSettings();
+					if (!value) {
+						await this.plugin.clearChatThread();
+					}
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName('Save answer folder')
+			.setDesc('Vault folder for saved answers from the command palette or the save icon on each reply.')
+			.addText((text) =>
+				text
+					.setPlaceholder('Grounded chat/answers')
+					.setValue(this.plugin.settings.saveAnswerFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.saveAnswerFolder = value.trim();
 						await this.plugin.saveSettings();
 					}),
 			);

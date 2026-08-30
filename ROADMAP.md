@@ -9,7 +9,7 @@ Use GitHub Issues for new ideas. Labels: `mvp`, `phase-2`, `phase-3`, `ux`, `ret
 - Phase 0: plugin loads, settings for key and model, ribbon and command. Done.
 - Phase 1: OpenRouter streaming chat shell (no retrieval). Done.
 - Phase 2: local lexical index (MiniSearch), citations, graph expand. Done.
-- Phase 3: epistemic status (`GROUNDED` / `PARTIAL` / `UNCERTAIN`), save-answer command, optional chat persistence.
+- Phase 3: epistemic status (`GROUNDED` / `PARTIAL` / `UNCERTAIN`), save-answer command, optional chat persistence. Done.
 - Phase 4: OSS docs, release CI.
 
 ## Later (not in MVP)
