@@ -1,38 +1,49 @@
-import { TFile, TFolder } from 'obsidian';
 import type GroundedChatPlugin from '../main';
 import { parseSkillMarkdownWithBlockDescription, type VaultSkill } from './types';
 
 export async function loadVaultSkills(
 	plugin: GroundedChatPlugin,
 ): Promise<VaultSkill[]> {
-	const folderPath = plugin.settings.skillsFolder.trim() || '.cursor/skills';
-	const folder = plugin.app.vault.getAbstractFileByPath(folderPath);
-	if (!(folder instanceof TFolder)) {
+	const folderPath = normalizeFolderPath(
+		plugin.settings.skillsFolder.trim() || '.cursor/skills',
+	);
+	const adapter = plugin.app.vault.adapter;
+
+	if (!(await adapter.exists(folderPath))) {
+		console.warn(`Grounded Chat: skills folder not found: ${folderPath}`);
+		return [];
+	}
+
+	let listing: { folders: string[]; files: string[] };
+	try {
+		listing = await adapter.list(folderPath);
+	} catch (error) {
+		console.warn(`Grounded Chat: could not list skills folder ${folderPath}`, error);
 		return [];
 	}
 
 	const skills: VaultSkill[] = [];
-	for (const child of folder.children) {
-		if (!(child instanceof TFolder)) {
+	for (const name of listing.folders) {
+		const skillPath = `${folderPath}/${name}/SKILL.md`;
+		if (!(await adapter.exists(skillPath))) {
 			continue;
 		}
-		const skillFile = child.children.find(
-			(entry) => entry instanceof TFile && entry.name === 'SKILL.md',
-		);
-		if (!(skillFile instanceof TFile)) {
-			continue;
-		}
-		const markdown = await plugin.app.vault.cachedRead(skillFile);
-		const parsed = parseSkillMarkdownWithBlockDescription(
-			skillFile.path,
-			markdown,
-		);
-		if (parsed) {
-			skills.push(parsed);
+		try {
+			const markdown = await adapter.read(skillPath);
+			const parsed = parseSkillMarkdownWithBlockDescription(skillPath, markdown);
+			if (parsed) {
+				skills.push(parsed);
+			}
+		} catch (error) {
+			console.warn(`Grounded Chat: failed to read skill ${skillPath}`, error);
 		}
 	}
 
 	return skills.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function normalizeFolderPath(path: string): string {
+	return path.replace(/\/+$/, '');
 }
 
 export function findSkill(

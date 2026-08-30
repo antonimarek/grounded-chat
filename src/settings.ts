@@ -139,7 +139,7 @@ export class GroundedChatSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Skills folder')
 			.setDesc(
-				'Vault folder with skill subfolders containing SKILL.md (example: .cursor/skills/conversation-to-obsidian-note/SKILL.md).',
+				'Folder with skill subfolders containing SKILL.md. Dot-folders such as .cursor/skills are supported.',
 			)
 			.addText((text) =>
 				text

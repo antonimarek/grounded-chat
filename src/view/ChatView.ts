@@ -33,6 +33,7 @@ import {
 	renderBubbleMarkdown,
 	setBubblePlainText,
 } from './markdown-bubble';
+import { evidenceListLine } from '../vault/links';
 
 export const VIEW_TYPE_GROUNDED_CHAT = 'grounded-chat';
 
@@ -157,7 +158,7 @@ export class ChatView extends ItemView {
 			this.plugin.settings.activeSkillId = this.skillSelectEl.value;
 			void this.plugin.saveSettings();
 		});
-		this.refreshSkillsUi();
+		void this.plugin.refreshSkills();
 
 		const composer = this.contentEl.createDiv({ cls: 'gc-composer' });
 		this.inputEl = composer.createEl('textarea', {
@@ -744,13 +745,7 @@ export class ChatView extends ItemView {
 			return;
 		}
 		const listEl = wrap.createDiv({ cls: 'gc-evidence-list markdown-rendered' });
-		const lines = evidence.map((chunk) => {
-			const chunkLabel =
-				chunk.heading === chunk.title
-					? chunk.title
-					: `${chunk.title} › ${chunk.heading}`;
-			return `- [[${chunk.title}|${chunkLabel}]]`;
-		});
+		const lines = evidence.map((chunk) => evidenceListLine(chunk));
 		await renderBubbleMarkdown(
 			this.app,
 			listEl,

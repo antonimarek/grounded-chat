@@ -1,4 +1,5 @@
 import type { RetrievedChunk } from '../index/types';
+import { evidenceLinkMarkdown } from '../vault/links';
 
 const CHUNK_CHAR_CAP = 1200;
 
@@ -31,14 +32,15 @@ export function buildSystemPrompt(
 			chunk.text.length > CHUNK_CHAR_CAP
 				? `${chunk.text.slice(0, CHUNK_CHAR_CAP)}\n…`
 				: chunk.text;
-		return `[${index + 1}] [[${chunk.title}]] › ${chunk.heading}\n${body}`;
+		return `[${index + 1}] ${evidenceLinkMarkdown(chunk)} › ${chunk.heading}\n${body}`;
 	});
 
 	return withSkill(
 		[
 			'You are a vault assistant.',
 			'Answer only from EVIDENCE.',
-			'Cite notes as [[Note title]].',
+			'Cite notes with the exact title from evidence, including any leading or trailing spaces.',
+		'Prefer path-style wikilinks from evidence when titles are ambiguous.',
 			'If the evidence is incomplete, say UNCERTAIN.',
 			'Do not invent facts, quotes, or sources.',
 			'If you interpret, label it as interpretation.',

@@ -1,4 +1,5 @@
 import { App, Notice, TFile } from 'obsidian';
+import { evidenceListLine } from '../vault/links';
 import type { EpistemicStatus } from './epistemic';
 import { statusLabel } from './epistemic';
 import type { AnswerMode } from './planner';
@@ -59,11 +60,7 @@ function formatAnswerNote(input: SaveAnswerInput): string {
 	if (input.mode === 'vault' && input.evidence.length > 0) {
 		lines.push('', '## Evidence', '');
 		for (const chunk of input.evidence) {
-			const label =
-				chunk.heading === chunk.title
-					? chunk.title
-					: `${chunk.title} › ${chunk.heading}`;
-			lines.push(`- [[${chunk.title}|${label}]]`);
+			lines.push(evidenceListLine(chunk));
 		}
 	}
 

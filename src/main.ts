@@ -81,6 +81,14 @@ export default class GroundedChatPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: 'refresh-skills',
+			name: 'Refresh skills',
+			callback: () => {
+				void this.refreshSkills();
+			},
+		});
+
 		this.addSettingTab(new GroundedChatSettingTab(this.app, this));
 	}
 
