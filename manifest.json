@@ -1,0 +1,10 @@
+{
+	"id": "vault-chat",
+	"name": "Vault Chat",
+	"version": "0.1.0",
+	"minAppVersion": "1.8.0",
+	"description": "Ask your vault questions. Answers cite notes. OpenRouter only. No paywall.",
+	"author": "Vault Chat contributors",
+	"authorUrl": "https://github.com/antonimarek/vault-chat",
+	"isDesktopOnly": true
+}
