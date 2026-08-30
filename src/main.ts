@@ -1,4 +1,4 @@
-import { MarkdownView, Plugin } from 'obsidian';
+import { MarkdownView, Plugin, TFile } from 'obsidian';
 import type { ThreadMessage } from './chat/types';
 import { VaultIndex } from './index/vault-index';
 import { emptyUsage, mergeUsage, type TokenUsage } from './openrouter/usage';
@@ -17,10 +17,22 @@ export default class GroundedChatPlugin extends Plugin {
 	chatThread: ThreadMessage[] = [];
 	skills: VaultSkill[] = [];
 	sessionUsage: TokenUsage = emptyUsage();
+	lastMarkdownPath: string | null = null;
 
 	async onload() {
 		await this.loadSettings();
 		await this.refreshSkills();
+
+		this.registerEvent(
+			this.app.workspace.on('file-open', (file) => {
+				this.trackMarkdownPath(file);
+			}),
+		);
+		this.registerEvent(
+			this.app.workspace.on('active-leaf-change', () => {
+				this.trackMarkdownPath(this.app.workspace.getActiveFile());
+			}),
+		);
 
 		this.vaultIndex = new VaultIndex(this.app, () => this.settings);
 		this.addChild(this.vaultIndex);
@@ -111,8 +123,34 @@ export default class GroundedChatPlugin extends Plugin {
 	}
 
 	activeNotePath(): string | null {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		return view?.file?.path ?? null;
+		const activeFile = this.app.workspace.getActiveFile();
+		if (activeFile?.extension === 'md') {
+			return activeFile.path;
+		}
+
+		if (this.lastMarkdownPath) {
+			const cached = this.app.vault.getAbstractFileByPath(this.lastMarkdownPath);
+			if (cached instanceof TFile && cached.extension === 'md') {
+				return cached.path;
+			}
+		}
+
+		for (const path of this.app.workspace.getLastOpenFiles()) {
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (file instanceof TFile && file.extension === 'md') {
+				return file.path;
+			}
+		}
+
+		const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		return markdownView?.file?.path ?? null;
+	}
+
+	private trackMarkdownPath(file: TFile | null): void {
+		if (file instanceof TFile && file.extension === 'md') {
+			this.lastMarkdownPath = file.path;
+			this.getChatView()?.refreshAttachUi();
+		}
 	}
 
 	async activateView(): Promise<void> {

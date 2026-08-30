@@ -186,6 +186,7 @@ export class ChatView extends ItemView {
 			cls: 'gc-btn gc-btn-small',
 			text: 'Attach active note',
 		});
+		this.attachActiveBtn = attachActiveBtn;
 		attachActiveBtn.addEventListener('click', () => void this.attachActiveNote());
 		const clearAttachBtn = attachBar.createEl('button', {
 			cls: 'gc-btn gc-btn-small',
@@ -702,7 +703,9 @@ export class ChatView extends ItemView {
 	private async attachActiveNote(): Promise<void> {
 		const path = this.plugin.activeNotePath();
 		if (!path) {
-			new Notice('Open a note in the editor first.');
+			new Notice(
+				'No recent markdown note found. Open a note in the editor, then attach it.',
+			);
 			return;
 		}
 		this.attachedNotePath = path;
@@ -715,29 +718,43 @@ export class ChatView extends ItemView {
 		this.refreshAttachUi();
 	}
 
-	private refreshAttachUi(): void {
+	private attachActiveBtn!: HTMLButtonElement;
+
+	refreshAttachUi(): void {
 		if (!this.attachEl) {
 			return;
 		}
 		this.attachEl.empty();
 		if (!this.attachedNotePath) {
-			this.attachEl.setText('No note attached');
-			return;
-		}
-		const title = this.noteTitle(this.attachedNotePath);
-		const link = this.attachEl.createEl('a', {
-			cls: 'gc-attach-link internal-link',
-			text: title,
-		});
-		link.dataset.href = this.attachedNotePath.replace(/\.md$/i, '');
-		link.addEventListener('click', (event) => {
-			event.preventDefault();
-			void this.app.workspace.openLinkText(
-				this.attachedNotePath!.replace(/\.md$/i, ''),
-				'',
-				false,
+			const candidate = this.plugin.activeNotePath();
+			this.attachEl.setText(
+				candidate
+					? `No note attached · candidate: ${this.noteTitle(candidate)}`
+					: 'No note attached',
 			);
-		});
+		} else {
+			const title = this.noteTitle(this.attachedNotePath);
+			const link = this.attachEl.createEl('a', {
+				cls: 'gc-attach-link internal-link',
+				text: title,
+			});
+			link.dataset.href = this.attachedNotePath.replace(/\.md$/i, '');
+			link.addEventListener('click', (event) => {
+				event.preventDefault();
+				void this.app.workspace.openLinkText(
+					this.attachedNotePath!.replace(/\.md$/i, ''),
+					'',
+					false,
+				);
+			});
+		}
+		if (this.attachActiveBtn) {
+			const candidate = this.plugin.activeNotePath();
+			this.attachActiveBtn.textContent = candidate
+				? `Attach: ${this.noteTitle(candidate)}`
+				: 'Attach active note';
+			this.attachActiveBtn.disabled = !candidate;
+		}
 	}
 
 	private noteTitle(path: string): string {
