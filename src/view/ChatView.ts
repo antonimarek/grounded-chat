@@ -6,6 +6,12 @@ import {
 	statusLabel,
 	type EpistemicStatus,
 } from '../chat/epistemic';
+import {
+	attachedNotePromptSection,
+	loadAttachedNote,
+	parseLeadingNoteLink,
+	resolveNoteLink,
+} from '../chat/attached-note';
 import { planAnswer, type AnswerMode } from '../chat/planner';
 import { openSavedAnswer, saveAnswerToVault } from '../chat/save-answer';
 import {
@@ -38,6 +44,7 @@ import {
 	renderBubbleMarkdown,
 	setBubblePlainText,
 } from './markdown-bubble';
+import type { AttachedNote } from '../chat/attached-note';
 import { evidenceListLine } from '../vault/links';
 
 export const VIEW_TYPE_GROUNDED_CHAT = 'grounded-chat';
@@ -60,7 +67,9 @@ export class ChatView extends ItemView {
 	private emptyEl!: HTMLElement;
 	private skillSelectEl!: HTMLSelectElement;
 	private usageFooterEl!: HTMLElement;
+	private attachEl!: HTMLElement;
 	private skillSlashMenu: SkillSlashMenu | null = null;
+	private attachedNotePath: string | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: GroundedChatPlugin) {
 		super(leaf);
@@ -170,6 +179,20 @@ export class ChatView extends ItemView {
 			void this.plugin.saveSettings();
 		});
 		void this.plugin.refreshSkills();
+
+		const attachBar = this.contentEl.createDiv({ cls: 'gc-attach-bar' });
+		this.attachEl = attachBar.createDiv({ cls: 'gc-attach-chip' });
+		const attachActiveBtn = attachBar.createEl('button', {
+			cls: 'gc-btn gc-btn-small',
+			text: 'Attach active note',
+		});
+		attachActiveBtn.addEventListener('click', () => void this.attachActiveNote());
+		const clearAttachBtn = attachBar.createEl('button', {
+			cls: 'gc-btn gc-btn-small',
+			text: 'Clear',
+		});
+		clearAttachBtn.addEventListener('click', () => this.clearAttachedNote());
+		this.refreshAttachUi();
 
 		const composer = this.contentEl.createDiv({ cls: 'gc-composer' });
 		const inputWrap = composer.createDiv({ cls: 'gc-input-wrap' });
@@ -414,17 +437,41 @@ export class ChatView extends ItemView {
 			await this.activateSkill(parsed.skill);
 			this.inputEl.value = '';
 			this.skillSlashMenu?.hide();
-			new Notice(`Skill active: ${parsed.skill.name}`);
+			const attached = this.attachedNotePath
+				? this.noteTitle(this.attachedNotePath)
+				: null;
+			new Notice(
+				attached
+					? `Skill active: ${parsed.skill.name} · attached: ${attached}`
+					: `Skill active: ${parsed.skill.name}. Attach a note to continue.`,
+			);
 			return;
 		}
 
-		const text = parsed.skill ? parsed.message : raw;
-		if (!text) {
+		let text = parsed.skill ? parsed.message : raw;
+		if (!text && !parsed.skill) {
 			return;
 		}
 
 		if (parsed.skill) {
 			await this.activateSkill(parsed.skill);
+		}
+
+		let attachedPath = this.attachedNotePath;
+		const leadingLink = parseLeadingNoteLink(text);
+		if (leadingLink.linktext) {
+			const resolved = resolveNoteLink(this.app, leadingLink.linktext);
+			if (resolved) {
+				attachedPath = resolved;
+				this.attachedNotePath = resolved;
+				this.refreshAttachUi();
+				text = leadingLink.message;
+			}
+		}
+
+		if (!text) {
+			new Notice('Add a message or attach a note.');
+			return;
 		}
 
 		this.inputEl.value = '';
@@ -453,6 +500,12 @@ export class ChatView extends ItemView {
 		let turnUsage: TokenUsage | null = null;
 
 		const activeSkill = parsed.skill ?? this.getActiveSkill();
+		const attachedNote = attachedPath
+			? await loadAttachedNote(this.app, attachedPath)
+			: null;
+		const attachedSection = attachedNote
+			? attachedNotePromptSection(attachedNote)
+			: undefined;
 		const skillInstructions = activeSkill
 			? skillPromptSection(activeSkill)
 			: undefined;
@@ -486,6 +539,7 @@ export class ChatView extends ItemView {
 				plan.evidence,
 				plan.mode,
 				plan.searchQuery,
+				attachedNote,
 			);
 
 			if (plan.directAnswer) {
@@ -506,8 +560,12 @@ export class ChatView extends ItemView {
 
 			const systemPrompt =
 				plan.mode === 'vault'
-					? buildSystemPrompt(plan.evidence, skillInstructions)
-					: buildConversationPrompt(skillInstructions);
+					? buildSystemPrompt(
+							plan.evidence,
+							skillInstructions,
+							attachedSection,
+						)
+					: buildConversationPrompt(skillInstructions, attachedSection);
 
 			setBubblePlainText(bodyEl, plan.mode === 'vault' ? 'Answering…' : '');
 
@@ -632,6 +690,59 @@ export class ChatView extends ItemView {
 		if (this.skillSelectEl) {
 			this.skillSelectEl.value = skill.id;
 		}
+		if (!this.attachedNotePath) {
+			const active = this.plugin.activeNotePath();
+			if (active) {
+				this.attachedNotePath = active;
+				this.refreshAttachUi();
+			}
+		}
+	}
+
+	private async attachActiveNote(): Promise<void> {
+		const path = this.plugin.activeNotePath();
+		if (!path) {
+			new Notice('Open a note in the editor first.');
+			return;
+		}
+		this.attachedNotePath = path;
+		this.refreshAttachUi();
+		new Notice(`Attached: ${this.noteTitle(path)}`);
+	}
+
+	private clearAttachedNote(): void {
+		this.attachedNotePath = null;
+		this.refreshAttachUi();
+	}
+
+	private refreshAttachUi(): void {
+		if (!this.attachEl) {
+			return;
+		}
+		this.attachEl.empty();
+		if (!this.attachedNotePath) {
+			this.attachEl.setText('No note attached');
+			return;
+		}
+		const title = this.noteTitle(this.attachedNotePath);
+		const link = this.attachEl.createEl('a', {
+			cls: 'gc-attach-link internal-link',
+			text: title,
+		});
+		link.dataset.href = this.attachedNotePath.replace(/\.md$/i, '');
+		link.addEventListener('click', (event) => {
+			event.preventDefault();
+			void this.app.workspace.openLinkText(
+				this.attachedNotePath!.replace(/\.md$/i, ''),
+				'',
+				false,
+			);
+		});
+	}
+
+	private noteTitle(path: string): string {
+		const file = this.app.vault.getAbstractFileByPath(path);
+		return file?.name.replace(/\.md$/i, '') ?? path;
 	}
 
 	private renderTokenBadge(
@@ -776,9 +887,32 @@ export class ChatView extends ItemView {
 		evidence: EvidenceRef[] | RetrievedChunk[],
 		mode: 'vault' | 'conversation',
 		searchQuery?: string,
+		attachedNote?: AttachedNote | null,
 	): Promise<void> {
 		row.querySelector('.gc-evidence')?.remove();
 		const wrap = row.createDiv({ cls: 'gc-evidence' });
+
+		if (attachedNote) {
+			wrap.createDiv({
+				cls: 'gc-evidence-label',
+				text: 'Attached note',
+			});
+			const attachedList = wrap.createDiv({
+				cls: 'gc-evidence-list markdown-rendered',
+			});
+			await renderBubbleMarkdown(
+				this.app,
+				attachedList,
+				evidenceListLine({
+					path: attachedNote.path,
+					title: attachedNote.title,
+					heading: attachedNote.title,
+				}),
+				this.sourcePath(),
+				this,
+			);
+		}
+
 		let label = 'From conversation';
 		if (mode === 'vault') {
 			if (evidence.length > 0) {

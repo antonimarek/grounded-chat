@@ -89,8 +89,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for pull requests and releases.
 Place skills in your vault under `.cursor/skills/<skill-id>/SKILL.md` (folder configurable in settings). Each skill needs YAML frontmatter with `name` and `description`. Select a skill in the chat pane dropdown, or type `/skill-id/` in the input (Cursor-style). Autocomplete appears when you type `/`.
 
 Examples:
-- `/conversation-to-obsidian-note/` — activate skill for the session
-- `/conversation-to-obsidian-note/ turn this chat into a gist` — run with a message
+- `/conversation-to-obsidian-note/` — activate skill (auto-attaches the open editor note)
+- `/conversation-to-obsidian-note/ re-gist this note` — with a message
+- `[[My Note]] summarize the gist` — attach a note inline for one message
+- **Attach active note** button — pin the editor note to the chat
+
+Attached note content is sent to the model as the primary source. Vault search still runs when the skill or question needs related links.
 
 ## Privacy
 

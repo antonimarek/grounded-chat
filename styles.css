@@ -197,6 +197,40 @@
 	background: var(--background-modifier-hover);
 }
 
+.gc-attach-bar {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px 0;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-primary);
+}
+
+.gc-attach-chip {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.gc-attach-link {
+	color: var(--text-accent);
+	text-decoration: none;
+	cursor: var(--cursor-link);
+}
+
+.gc-attach-link:hover {
+	text-decoration: underline;
+}
+
+.gc-btn-small {
+	font-size: var(--font-ui-smaller);
+	padding: 2px 8px;
+}
+
 .gc-composer {
 	flex: 0 0 auto;
 	border-top: 1px solid var(--background-modifier-border);
