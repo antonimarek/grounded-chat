@@ -27,4 +27,6 @@ export interface IndexStatus {
 	indexing: boolean;
 	files: number;
 	chunks: number;
+	syncDone: number;
+	syncTotal: number;
 }

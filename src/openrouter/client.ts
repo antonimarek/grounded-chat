@@ -1,6 +1,7 @@
 export interface ChatMessage {
-	role: 'system' | 'user' | 'assistant';
+	role: 'system' | 'user' | 'assistant' | 'tool';
 	content: string;
+	tool_call_id?: string;
 }
 
 export interface StreamChatParams {
@@ -13,6 +14,28 @@ export interface StreamChatParams {
 	onDelta: (text: string) => void;
 }
 
+export interface CompleteChatParams {
+	apiKey: string;
+	baseUrl: string;
+	model: string;
+	systemPrompt: string;
+	messages: ChatMessage[];
+	signal: AbortSignal;
+	tools?: unknown[];
+	toolChoice?: 'auto' | 'none';
+}
+
+export interface ToolCall {
+	id: string;
+	name: string;
+	arguments: string;
+}
+
+export interface CompleteChatResult {
+	content: string;
+	toolCalls: ToolCall[];
+}
+
 export class OpenRouterError extends Error {
 	status: number;
 
@@ -21,6 +44,70 @@ export class OpenRouterError extends Error {
 		this.name = 'OpenRouterError';
 		this.status = status;
 	}
+}
+
+export async function completeChat(
+	params: CompleteChatParams,
+): Promise<CompleteChatResult> {
+	const base = params.baseUrl.replace(/\/$/, '');
+	const url = `${base}/chat/completions`;
+	const messages = [
+		{ role: 'system', content: params.systemPrompt },
+		...params.messages.filter((message) => message.role !== 'system'),
+	];
+
+	const body: Record<string, unknown> = {
+		model: params.model,
+		messages,
+		stream: false,
+		temperature: 0.1,
+	};
+	if (params.tools && params.tools.length > 0) {
+		body.tools = params.tools;
+		body.tool_choice = params.toolChoice ?? 'auto';
+	}
+
+	const response = await fetch(url, {
+		method: 'POST',
+		headers: buildHeaders(params.apiKey),
+		body: JSON.stringify(body),
+		signal: params.signal,
+	});
+
+	if (!response.ok) {
+		const detail = await readErrorBody(response);
+		throw new OpenRouterError(detail, response.status);
+	}
+
+	const json = (await response.json()) as {
+		choices?: Array<{
+			message?: {
+				content?: string | null;
+				tool_calls?: Array<{
+					id: string;
+					function?: { name?: string; arguments?: string };
+				}>;
+			};
+		}>;
+	};
+
+	const message = json.choices?.[0]?.message;
+	const toolCalls: ToolCall[] = [];
+	for (const call of message?.tool_calls ?? []) {
+		if (!call.function?.name) {
+			continue;
+		}
+		toolCalls.push({
+			id: call.id,
+			name: call.function.name,
+			arguments: call.function.arguments ?? '{}',
+		});
+	}
+
+	return {
+		content: message?.content?.trim() ?? '',
+		toolCalls,
+	};
 }
 
 export async function streamChat(params: StreamChatParams): Promise<void> {
@@ -33,12 +120,7 @@ export async function streamChat(params: StreamChatParams): Promise<void> {
 
 	const response = await fetch(url, {
 		method: 'POST',
-		headers: {
-			Authorization: `Bearer ${params.apiKey}`,
-			'Content-Type': 'application/json',
-			'HTTP-Referer': 'https://github.com/antonimarek/grounded-chat',
-			'X-Title': 'Grounded Chat',
-		},
+		headers: buildHeaders(params.apiKey),
 		body: JSON.stringify({
 			model: params.model,
 			messages,
@@ -76,6 +158,15 @@ export async function streamChat(params: StreamChatParams): Promise<void> {
 			}
 		}
 	}
+}
+
+function buildHeaders(apiKey: string): Record<string, string> {
+	return {
+		Authorization: `Bearer ${apiKey}`,
+		'Content-Type': 'application/json',
+		'HTTP-Referer': 'https://github.com/antonimarek/grounded-chat',
+		'X-Title': 'Grounded Chat',
+	};
 }
 
 function parseSseLine(line: string): string | null {

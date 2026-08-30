@@ -33,3 +33,13 @@ export function buildSystemPrompt(evidence: RetrievedChunk[]): string {
 		blocks.join('\n\n'),
 	].join('\n');
 }
+
+export function buildConversationPrompt(): string {
+	return [
+		'You are a vault assistant.',
+		'Answer from the conversation history above.',
+		'Do not invent note content or citations.',
+		'If the user asks what they asked before, quote their earlier user message.',
+		'If you lack context, say UNCERTAIN.',
+	].join(' ');
+}

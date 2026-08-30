@@ -22,7 +22,7 @@ See [ROADMAP.md](ROADMAP.md).
 4. Wait until the banner shows file and chunk counts.
 5. Ask a question. Sources appear under the answer. Click a source to open the note.
 6. Use Stop to cancel a stream.
-7. Optional: command **Rebuild index** after you change exclude folders.
+7. Optional: command **Rebuild index** after you change exclude paths.
 
 ## Check it in Obsidian
 

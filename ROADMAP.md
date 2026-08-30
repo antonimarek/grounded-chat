@@ -9,7 +9,7 @@ Use GitHub Issues for new ideas. Labels: `mvp`, `phase-2`, `phase-3`, `ux`, `ret
 - Phase 0: plugin loads, settings for key and model, ribbon and command. Done.
 - Phase 1: OpenRouter streaming chat shell (no retrieval). Done.
 - Phase 2: local lexical index (MiniSearch), citations, graph expand. Done.
-- Phase 3: epistemic status (`GROUNDED` / `PARTIAL` / `UNCERTAIN`), folder excludes, save-answer command.
+- Phase 3: epistemic status (`GROUNDED` / `PARTIAL` / `UNCERTAIN`), save-answer command, optional chat persistence.
 - Phase 4: OSS docs, release CI.
 
 ## Later (not in MVP)
@@ -18,7 +18,7 @@ Use GitHub Issues for new ideas. Labels: `mvp`, `phase-2`, `phase-3`, `ux`, `ret
 - Hybrid lexical + vector retrieval.
 - Privacy toggle: lexical only, no embed API.
 - Mobile support (`isDesktopOnly: false`).
-- Chat history as vault notes (syncs with iCloud).
+- Chat history as vault notes (syncs with iCloud). In-memory only for now.
 - Local models (Ollama).
 - Rerankers.
 - Multi-agent tools and web search.

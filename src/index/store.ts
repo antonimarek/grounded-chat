@@ -50,20 +50,11 @@ export class ChunkStore {
 		file: FileRecord,
 		chunks: NoteChunk[],
 	): Promise<void> {
+		await this.deleteChunksForPath(path);
 		const db = this.requireDb();
 		await new Promise<void>((resolve, reject) => {
 			const tx = db.transaction(['chunks', 'files'], 'readwrite');
 			const chunkStore = tx.objectStore('chunks');
-			const pathIndex = chunkStore.index('path');
-			const range = IDBKeyRange.only(path);
-			const cursorReq = pathIndex.openCursor(range);
-			cursorReq.onsuccess = () => {
-				const cursor = cursorReq.result;
-				if (cursor) {
-					cursor.delete();
-					cursor.continue();
-				}
-			};
 			for (const chunk of chunks) {
 				chunkStore.put(chunk);
 			}
@@ -74,11 +65,29 @@ export class ChunkStore {
 	}
 
 	async deletePath(path: string): Promise<void> {
-		await this.replaceFile(path, { path, hash: '', mtime: 0 }, []);
+		await this.deleteChunksForPath(path);
 		const db = this.requireDb();
 		await new Promise<void>((resolve, reject) => {
 			const tx = db.transaction('files', 'readwrite');
 			tx.objectStore('files').delete(path);
+			tx.oncomplete = () => resolve();
+			tx.onerror = () => reject(asError(tx.error));
+		});
+	}
+
+	private deleteChunksForPath(path: string): Promise<void> {
+		const db = this.requireDb();
+		return new Promise((resolve, reject) => {
+			const tx = db.transaction('chunks', 'readwrite');
+			const index = tx.objectStore('chunks').index('path');
+			const req = index.openCursor(IDBKeyRange.only(path));
+			req.onsuccess = () => {
+				const cursor = req.result;
+				if (cursor) {
+					cursor.delete();
+					cursor.continue();
+				}
+			};
 			tx.oncomplete = () => resolve();
 			tx.onerror = () => reject(asError(tx.error));
 		});

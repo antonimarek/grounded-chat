@@ -40,14 +40,19 @@ export class LexicalIndex {
 		this.byPath.delete(path);
 	}
 
-	query(query: string, limit: number): Array<NoteChunk & { score: number }> {
+	query(
+		query: string,
+		limit: number,
+		combineWith: 'AND' | 'OR' = 'AND',
+	): Array<NoteChunk & { score: number }> {
 		if (!query.trim()) {
 			return [];
 		}
 		const hits = this.searcher.search(query, {
 			prefix: true,
-			fuzzy: 0.2,
-			boost: { title: 3, heading: 2, text: 1 },
+			fuzzy: 0.25,
+			boost: { title: 4, heading: 2.5, text: 1 },
+			combineWith,
 		});
 		return hits.slice(0, limit).map((hit) => {
 			const stored = hit as typeof hit & {

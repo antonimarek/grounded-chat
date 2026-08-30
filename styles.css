@@ -36,6 +36,8 @@
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
+	user-select: text;
+	-webkit-user-select: text;
 }
 
 .gc-row {
@@ -51,6 +53,7 @@
 	gap: 6px;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
+	user-select: none;
 }
 
 .gc-meta-icon {
@@ -60,13 +63,43 @@
 }
 
 .gc-bubble-body {
-	white-space: pre-wrap;
 	word-break: break-word;
 	padding: 8px 10px;
 	border-radius: 8px;
 	background: var(--background-secondary);
 	font-size: var(--font-ui-small);
 	line-height: 1.45;
+	user-select: text;
+	-webkit-user-select: text;
+	cursor: text;
+}
+
+.gc-bubble-body.markdown-rendered {
+	white-space: normal;
+}
+
+.gc-bubble-body.markdown-rendered :is(p, ul, ol, blockquote) {
+	margin: 0.35em 0;
+}
+
+.gc-bubble-body.markdown-rendered :is(h1, h2, h3, h4) {
+	margin: 0.5em 0 0.25em;
+	font-size: var(--font-ui-medium);
+	line-height: 1.3;
+}
+
+.gc-bubble-body.markdown-rendered ul,
+.gc-bubble-body.markdown-rendered ol {
+	padding-left: 1.25em;
+}
+
+.gc-bubble-body.markdown-rendered .internal-link {
+	cursor: var(--cursor-link);
+	text-decoration: none;
+}
+
+.gc-bubble-body.markdown-rendered .internal-link:hover {
+	text-decoration: underline;
 }
 
 .gc-row-user .gc-bubble-body {
@@ -106,6 +139,8 @@
 	flex-direction: column;
 	gap: 4px;
 	padding: 0 2px;
+	user-select: text;
+	-webkit-user-select: text;
 }
 
 .gc-evidence-label {
@@ -113,10 +148,23 @@
 	color: var(--text-muted);
 	text-transform: uppercase;
 	letter-spacing: 0.02em;
+	user-select: none;
 }
 
-.gc-evidence-link {
+.gc-evidence-list {
 	font-size: var(--font-ui-smaller);
+}
+
+.gc-evidence-list ul {
+	margin: 0;
+	padding-left: 1.1em;
+}
+
+.gc-evidence-list .internal-link {
+	cursor: var(--cursor-link);
 	text-decoration: none;
 }
 
+.gc-evidence-list .internal-link:hover {
+	text-decoration: underline;
+}

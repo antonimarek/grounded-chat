@@ -1,9 +1,14 @@
-import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
+import { HoverPopover, ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
 import type GroundedChatPlugin from '../main';
 import type { RetrievedChunk } from '../index/types';
+import { planAnswer } from '../chat/planner';
 import { OpenRouterError, streamChat, type ChatMessage } from '../openrouter/client';
-import { buildSystemPrompt } from '../prompt/builder';
-import { retrieve } from '../retrieve/retriever';
+import { buildConversationPrompt, buildSystemPrompt } from '../prompt/builder';
+import { wireInternalLinks } from './link-handler';
+import {
+	renderBubbleMarkdown,
+	setBubblePlainText,
+} from './markdown-bubble';
 
 export const VIEW_TYPE_GROUNDED_CHAT = 'grounded-chat';
 
@@ -14,10 +19,12 @@ interface ThreadMessage {
 
 export class ChatView extends ItemView {
 	plugin: GroundedChatPlugin;
+	hoverPopover: HoverPopover | null = null;
 	private thread: ThreadMessage[] = [];
 	private abort: AbortController | null = null;
 	private streaming = false;
 	private unsubIndex: (() => void) | null = null;
+	private streamRenderTimer: number | null = null;
 
 	private bannerEl!: HTMLElement;
 	private messagesEl!: HTMLElement;
@@ -57,6 +64,7 @@ export class ChatView extends ItemView {
 		this.renderEmpty();
 
 		this.messagesEl = this.contentEl.createDiv({ cls: 'gc-messages' });
+		wireInternalLinks(this.app, this, this.messagesEl, () => this.sourcePath());
 
 		const composer = this.contentEl.createDiv({ cls: 'gc-composer' });
 		this.inputEl = composer.createEl('textarea', {
@@ -89,6 +97,7 @@ export class ChatView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		this.clearStreamRenderTimer();
 		this.stop();
 		this.unsubIndex?.();
 		this.unsubIndex = null;
@@ -100,8 +109,12 @@ export class ChatView extends ItemView {
 			return;
 		}
 		if (status.indexing) {
+			const progress =
+				status.syncTotal > 0
+					? `${status.syncDone}/${status.syncTotal} files`
+					: `${status.files} files`;
 			this.bannerEl.setText(
-				`Indexing notes… ${status.files} files, ${status.chunks} chunks.`,
+				`Indexing notes… ${progress}, ${status.chunks} chunks.`,
 			);
 			return;
 		}
@@ -157,6 +170,39 @@ export class ChatView extends ItemView {
 		this.stopBtn.hidden = !busy;
 	}
 
+	private sourcePath(): string {
+		return this.plugin.activeNotePath() ?? '';
+	}
+
+	private clearStreamRenderTimer(): void {
+		if (this.streamRenderTimer !== null) {
+			window.clearTimeout(this.streamRenderTimer);
+			this.streamRenderTimer = null;
+		}
+	}
+
+	private scheduleBubbleRender(bodyEl: HTMLElement, markdown: string): void {
+		this.clearStreamRenderTimer();
+		this.streamRenderTimer = window.setTimeout(() => {
+			this.streamRenderTimer = null;
+			void this.renderBubbleBody(bodyEl, markdown);
+		}, 120);
+	}
+
+	private async renderBubbleBody(
+		bodyEl: HTMLElement,
+		markdown: string,
+	): Promise<void> {
+		await renderBubbleMarkdown(
+			this.app,
+			bodyEl,
+			markdown,
+			this.sourcePath(),
+			this,
+		);
+		this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+	}
+
 	private async send(): Promise<void> {
 		if (this.streaming) {
 			return;
@@ -172,32 +218,58 @@ export class ChatView extends ItemView {
 
 		this.inputEl.value = '';
 		this.thread.push({ role: 'user', content: text });
-		this.appendBubble('user', text);
+		const userRow = this.appendBubble('user');
+		const userBody = userRow.querySelector('.gc-bubble-body') as HTMLElement;
+		await this.renderBubbleBody(userBody, text);
 
-		const evidence = retrieve(
-			this.app,
-			this.plugin.vaultIndex.lexical,
-			text,
-			{
-				topK: this.plugin.settings.topK,
-				activePath: this.plugin.activeNotePath(),
-			},
-		);
-		const systemPrompt = buildSystemPrompt(evidence);
-
-		const assistantEl = this.appendBubble('assistant', '');
-		const bodyEl = assistantEl.querySelector('.gc-bubble-body') as HTMLElement;
-		this.renderEvidence(assistantEl, evidence);
-		this.setBusy(true);
-		this.abort = new AbortController();
-
-		let assembled = '';
 		const history: ChatMessage[] = this.thread.map((message) => ({
 			role: message.role,
 			content: message.content,
 		}));
 
+		const assistantRow = this.appendBubble('assistant');
+		const bodyEl = assistantRow.querySelector('.gc-bubble-body') as HTMLElement;
+		setBubblePlainText(bodyEl, 'Thinking…');
+		this.setBusy(true);
+		this.abort = new AbortController();
+
+		let assembled = '';
+
 		try {
+			const plan = await planAnswer({
+				app: this.app,
+				lexical: this.plugin.vaultIndex.lexical,
+				apiKey: this.plugin.settings.openRouterApiKey,
+				baseUrl: this.plugin.settings.baseUrl,
+				model: this.plugin.settings.chatModel,
+				userMessage: text,
+				history,
+				topK: this.plugin.settings.topK,
+				activePath: this.plugin.activeNotePath(),
+				signal: this.abort.signal,
+			});
+
+			await this.renderEvidence(
+				assistantRow,
+				plan.evidence,
+				plan.mode,
+				plan.searchQuery,
+			);
+
+			if (plan.directAnswer) {
+				assembled = plan.directAnswer;
+				await this.renderBubbleBody(bodyEl, assembled);
+				this.thread.push({ role: 'assistant', content: assembled });
+				return;
+			}
+
+			const systemPrompt =
+				plan.mode === 'vault'
+					? buildSystemPrompt(plan.evidence)
+					: buildConversationPrompt();
+
+			setBubblePlainText(bodyEl, '');
+
 			await streamChat({
 				apiKey: this.plugin.settings.openRouterApiKey,
 				baseUrl: this.plugin.settings.baseUrl,
@@ -207,25 +279,30 @@ export class ChatView extends ItemView {
 				signal: this.abort.signal,
 				onDelta: (delta) => {
 					assembled += delta;
-					bodyEl.setText(assembled);
-					this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+					this.scheduleBubbleRender(bodyEl, assembled);
 				},
 			});
+			this.clearStreamRenderTimer();
 			if (!assembled) {
-				bodyEl.setText('(No text in response)');
+				setBubblePlainText(bodyEl, '(No text in response)');
+			} else {
+				await this.renderBubbleBody(bodyEl, assembled);
 			}
 			this.thread.push({ role: 'assistant', content: assembled });
 		} catch (error) {
+			this.clearStreamRenderTimer();
 			if ((error as Error).name === 'AbortError') {
 				if (assembled) {
 					this.thread.push({ role: 'assistant', content: assembled });
+					await this.renderBubbleBody(bodyEl, assembled);
 				} else {
-					bodyEl.setText('(Stopped)');
+					setBubblePlainText(bodyEl, '(Stopped)');
 				}
 			} else if (error instanceof OpenRouterError) {
-				bodyEl.setText(`Error ${error.status}: ${error.message}`);
+				setBubblePlainText(bodyEl, `Error ${error.status}: ${error.message}`);
 			} else {
-				bodyEl.setText(
+				setBubblePlainText(
+					bodyEl,
 					error instanceof Error ? error.message : 'Request failed',
 				);
 			}
@@ -235,10 +312,7 @@ export class ChatView extends ItemView {
 		}
 	}
 
-	private appendBubble(
-		role: 'user' | 'assistant',
-		content: string,
-	): HTMLElement {
+	private appendBubble(role: 'user' | 'assistant'): HTMLElement {
 		this.emptyEl.addClass('gc-empty-hidden');
 		const row = this.messagesEl.createDiv({
 			cls: `gc-row gc-row-${role}`,
@@ -250,30 +324,49 @@ export class ChatView extends ItemView {
 			cls: 'gc-meta-label',
 			text: role === 'user' ? 'You' : 'Model',
 		});
-		row.createDiv({ cls: 'gc-bubble-body' }).setText(content);
+		row.createDiv({ cls: 'gc-bubble-body' });
 		this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
 		return row;
 	}
 
-	private renderEvidence(row: HTMLElement, evidence: RetrievedChunk[]): void {
+	private async renderEvidence(
+		row: HTMLElement,
+		evidence: RetrievedChunk[],
+		mode: 'vault' | 'conversation',
+		searchQuery?: string,
+	): Promise<void> {
 		const wrap = row.createDiv({ cls: 'gc-evidence' });
+		let label = 'From conversation';
+		if (mode === 'vault') {
+			if (evidence.length > 0) {
+				label = searchQuery
+					? `Evidence · search: ${searchQuery}`
+					: 'Evidence';
+			} else {
+				label = 'No matching notes';
+			}
+		}
 		wrap.createDiv({
 			cls: 'gc-evidence-label',
-			text: evidence.length > 0 ? 'Evidence' : 'No matching notes',
+			text: label,
 		});
-		if (evidence.length === 0) {
+		if (mode !== 'vault' || evidence.length === 0) {
 			return;
 		}
-		for (const chunk of evidence) {
-			const link = wrap.createEl('a', {
-				cls: 'gc-evidence-link internal-link',
-				text: `${chunk.title} › ${chunk.heading}`,
-			});
-			link.href = '#';
-			link.addEventListener('click', (event) => {
-				event.preventDefault();
-				void this.app.workspace.openLinkText(chunk.path, '/', false);
-			});
-		}
+		const listEl = wrap.createDiv({ cls: 'gc-evidence-list markdown-rendered' });
+		const lines = evidence.map((chunk) => {
+			const label =
+				chunk.heading === chunk.title
+					? chunk.title
+					: `${chunk.title} › ${chunk.heading}`;
+			return `- [[${chunk.title}|${label}]]`;
+		});
+		await renderBubbleMarkdown(
+			this.app,
+			listEl,
+			lines.join('\n'),
+			this.sourcePath(),
+			this,
+		);
 	}
 }

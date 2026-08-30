@@ -1,8 +1,10 @@
 import type { App } from 'obsidian';
 import type { LexicalIndex } from '../index/lexical';
 import type { RetrievedChunk } from '../index/types';
+import { buildSearchQueries } from './query';
 
 const NEIGHBOR_CHUNK_CAP = 2;
+const MAX_CHUNKS_PER_NOTE = 2;
 
 export function retrieve(
 	app: App,
@@ -10,22 +12,45 @@ export function retrieve(
 	query: string,
 	options: { topK: number; activePath: string | null },
 ): RetrievedChunk[] {
-	const lexicalHits = lexical.query(query, Math.max(options.topK * 3, 12));
 	const scored = new Map<string, RetrievedChunk>();
+	const queries = buildSearchQueries(query);
+	const poolSize = Math.max(options.topK * 5, 20);
 
-	for (const hit of lexicalHits) {
-		const boost = hit.path === options.activePath ? 1.35 : 1;
-		scored.set(hit.id, {
-			id: hit.id,
-			path: hit.path,
-			title: hit.title,
-			heading: hit.heading,
-			text: hit.text,
-			score: hit.score * boost,
-		});
+	for (let i = 0; i < queries.length; i++) {
+		const q = queries[i];
+		if (!q) {
+			continue;
+		}
+		const isPrimary = i === 0;
+		const combineWith = isPrimary && q.split(/\s+/).length > 1 ? 'OR' : 'AND';
+		const hits = lexical.query(q, poolSize, combineWith);
+
+		for (const hit of hits) {
+			const activeBoost = hit.path === options.activePath ? 1.35 : 1;
+			const queryBoost = isPrimary ? 1 : 0.75;
+			const nextScore = hit.score * activeBoost * queryBoost;
+			const existing = scored.get(hit.id);
+			if (existing) {
+				existing.score = Math.max(existing.score, nextScore) + 0.12;
+			} else {
+				scored.set(hit.id, {
+					id: hit.id,
+					path: hit.path,
+					title: hit.title,
+					heading: hit.heading,
+					text: hit.text,
+					score: nextScore,
+				});
+			}
+		}
 	}
 
-	const seedPaths = new Set(lexicalHits.map((hit) => hit.path));
+	const seedPaths = new Set(
+		[...scored.values()]
+			.sort((a, b) => b.score - a.score)
+			.slice(0, 8)
+			.map((hit) => hit.path),
+	);
 	if (options.activePath) {
 		seedPaths.add(options.activePath);
 	}
@@ -47,15 +72,40 @@ export function retrieve(
 					title: chunk.title,
 					heading: chunk.heading,
 					text: chunk.text,
-					score: 0.4,
+					score: 0.35,
 				});
 			}
 		}
 	}
 
-	return [...scored.values()]
-		.sort((a, b) => b.score - a.score)
-		.slice(0, options.topK);
+	return diversifyByPath(
+		[...scored.values()].sort((a, b) => b.score - a.score),
+		options.topK,
+		MAX_CHUNKS_PER_NOTE,
+	);
+}
+
+function diversifyByPath(
+	sorted: RetrievedChunk[],
+	topK: number,
+	maxPerPath: number,
+): RetrievedChunk[] {
+	const perPath = new Map<string, number>();
+	const out: RetrievedChunk[] = [];
+
+	for (const chunk of sorted) {
+		const count = perPath.get(chunk.path) ?? 0;
+		if (count >= maxPerPath) {
+			continue;
+		}
+		perPath.set(chunk.path, count + 1);
+		out.push(chunk);
+		if (out.length >= topK) {
+			break;
+		}
+	}
+
+	return out;
 }
 
 function oneHop(app: App, path: string): string[] {

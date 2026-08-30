@@ -84,11 +84,13 @@ export class GroundedChatSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('Exclude folders')
-			.setDesc('One folder path per line. Those notes are not indexed.')
+			.setName('Exclude paths')
+			.setDesc(
+				'Dot-folders are always skipped. Add one rule per line: plain folder prefix, or /regex/. Lines starting with # are ignored.',
+			)
 			.addTextArea((area) =>
 				area
-					.setPlaceholder('Folder path')
+					.setPlaceholder('copilot')
 					.setValue(this.plugin.settings.excludeFolders)
 					.onChange(async (value) => {
 						this.plugin.settings.excludeFolders = value;

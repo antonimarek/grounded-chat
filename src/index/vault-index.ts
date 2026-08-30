@@ -1,10 +1,18 @@
 import { App, Component, TAbstractFile, TFile, debounce } from 'obsidian';
 import type { GroundedChatSettings } from '../settings';
 import { chunkMarkdown } from './chunker';
+import {
+	emptyExcludeRules,
+	isPathExcluded,
+	parseExcludeRules,
+	type ExcludeRules,
+} from './excludes';
 import { hashText } from './hash';
 import { LexicalIndex } from './lexical';
 import { ChunkStore } from './store';
 import type { IndexStatus } from './types';
+
+const PROGRESS_EVERY = 10;
 
 export class VaultIndex extends Component {
 	readonly lexical = new LexicalIndex();
@@ -13,10 +21,16 @@ export class VaultIndex extends Component {
 		indexing: false,
 		files: 0,
 		chunks: 0,
+		syncDone: 0,
+		syncTotal: 0,
 	};
 
 	private store: ChunkStore;
 	private listeners = new Set<() => void>();
+	private excludeCacheKey = '';
+	private excludeRules: ExcludeRules = emptyExcludeRules();
+	private syncRunning = false;
+	private syncQueued = false;
 
 	constructor(
 		private app: App,
@@ -38,6 +52,7 @@ export class VaultIndex extends Component {
 		const cached = await this.store.getAllChunks();
 		this.lexical.load(cached);
 		this.refreshCounts();
+		this.status.ready = cached.length > 0;
 		this.notify();
 
 		this.registerEvent(
@@ -65,7 +80,9 @@ export class VaultIndex extends Component {
 			}),
 		);
 
-		await this.syncVault();
+		void this.syncVault(false).catch((error) => {
+			console.error('Grounded Chat: index sync failed', error);
+		});
 	}
 
 	async rebuild(): Promise<void> {
@@ -73,46 +90,89 @@ export class VaultIndex extends Component {
 	}
 
 	private debouncedFile = debounce((file: TFile) => {
-		void this.upsertFile(file);
+		if (this.syncRunning) {
+			return;
+		}
+		void this.upsertFile(file, false, false);
 	}, 400);
 
 	private async syncVault(force = false): Promise<void> {
+		if (this.syncRunning) {
+			this.syncQueued = true;
+			return;
+		}
+		this.syncRunning = true;
 		this.status.indexing = true;
+		this.status.syncDone = 0;
 		this.notify();
-		const files = this.app.vault
-			.getMarkdownFiles()
-			.filter((file) => this.include(file.path));
-		const known = new Set(
-			(await this.store.getAllFiles()).map((record) => record.path),
-		);
 
-		for (let i = 0; i < files.length; i++) {
-			const file = files[i];
-			if (!file) {
-				continue;
+		try {
+			const files = this.app.vault
+				.getMarkdownFiles()
+				.filter((file) => this.include(file.path));
+			this.status.syncTotal = files.length;
+			this.refreshCounts();
+			this.notify();
+
+			const known = new Set(
+				(await this.store.getAllFiles()).map((record) => record.path),
+			);
+
+			for (let i = 0; i < files.length; i++) {
+				const file = files[i];
+				if (!file) {
+					continue;
+				}
+				known.delete(file.path);
+				await this.upsertFile(file, force, true);
+				this.status.syncDone = i + 1;
+				if (i > 0 && i % PROGRESS_EVERY === 0) {
+					this.refreshCounts();
+					this.notify();
+					await this.yieldToUi();
+				}
 			}
-			known.delete(file.path);
-			await this.upsertFile(file, force);
-			if (i > 0 && i % 25 === 0) {
-				await new Promise((resolve) => {
-					window.setTimeout(resolve, 0);
+
+			for (const stale of known) {
+				this.lexical.removePath(stale);
+				await this.store.deletePath(stale);
+			}
+
+			this.status.ready = true;
+		} catch (error) {
+			console.error('Grounded Chat: index sync failed', error);
+			throw error;
+		} finally {
+			this.syncRunning = false;
+			this.status.indexing = false;
+			this.status.syncDone = this.status.syncTotal;
+			this.refreshCounts();
+			this.notify();
+			if (this.syncQueued) {
+				this.syncQueued = false;
+				void this.syncVault(force).catch((err) => {
+					console.error('Grounded Chat: queued sync failed', err);
 				});
 			}
 		}
-		for (const stale of known) {
-			this.lexical.removePath(stale);
-			await this.store.deletePath(stale);
-		}
-		this.status.indexing = false;
-		this.status.ready = true;
-		this.refreshCounts();
-		this.notify();
 	}
 
-	private async upsertFile(file: TFile, force = false): Promise<void> {
+	private async upsertFile(
+		file: TFile,
+		force = false,
+		quiet = false,
+	): Promise<void> {
 		if (file.extension !== 'md' || !this.include(file.path)) {
 			return;
 		}
+
+		if (!force) {
+			const previous = await this.store.getFile(file.path);
+			if (previous && previous.mtime === file.stat.mtime) {
+				return;
+			}
+		}
+
 		const markdown = await this.app.vault.cachedRead(file);
 		const hash = hashText(`${file.stat.mtime}:${markdown}`);
 		if (!force) {
@@ -121,6 +181,7 @@ export class VaultIndex extends Component {
 				return;
 			}
 		}
+
 		const title = file.basename;
 		const chunks = chunkMarkdown(file.path, title, markdown);
 		await this.store.replaceFile(
@@ -129,8 +190,10 @@ export class VaultIndex extends Component {
 			chunks,
 		);
 		this.lexical.replacePath(file.path, chunks);
-		this.refreshCounts();
-		this.notify();
+		if (!quiet) {
+			this.refreshCounts();
+			this.notify();
+		}
 	}
 
 	private async removeFile(file: TAbstractFile): Promise<void> {
@@ -147,19 +210,17 @@ export class VaultIndex extends Component {
 		this.lexical.removePath(oldPath);
 		await this.store.deletePath(oldPath);
 		if (file instanceof TFile) {
-			await this.upsertFile(file, true);
+			await this.upsertFile(file, true, false);
 		}
 	}
 
 	private include(path: string): boolean {
 		const raw = this.getSettings().excludeFolders;
-		const prefixes = raw
-			.split('\n')
-			.map((line) => line.trim().replace(/\/$/, ''))
-			.filter((line) => line.length > 0);
-		return !prefixes.some(
-			(prefix) => path === prefix || path.startsWith(`${prefix}/`),
-		);
+		if (raw !== this.excludeCacheKey) {
+			this.excludeCacheKey = raw;
+			this.excludeRules = parseExcludeRules(raw);
+		}
+		return !isPathExcluded(path, this.excludeRules);
 	}
 
 	private refreshCounts(): void {
@@ -167,6 +228,12 @@ export class VaultIndex extends Component {
 		this.status.files = this.app.vault
 			.getMarkdownFiles()
 			.filter((file) => this.include(file.path)).length;
+	}
+
+	private yieldToUi(): Promise<void> {
+		return new Promise((resolve) => {
+			window.setTimeout(resolve, 0);
+		});
 	}
 
 	private notify(): void {
