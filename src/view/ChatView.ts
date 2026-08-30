@@ -1,4 +1,4 @@
-import { HoverPopover, ItemView, Notice, WorkspaceLeaf, setIcon } from 'obsidian';
+import { HoverPopover, ItemView, Notice, TFile, WorkspaceLeaf, setIcon } from 'obsidian';
 import type GroundedChatPlugin from '../main';
 import type { RetrievedChunk } from '../index/types';
 import {
@@ -9,15 +9,34 @@ import {
 import {
 	attachedNotePromptSection,
 	loadAttachedNote,
-	parseLeadingNoteLink,
-	resolveNoteLink,
+	resolveNoteMentionPath,
+	shouldIsolateAttachedTurn,
 } from '../chat/attached-note';
+import {
+	estimateNoteSize,
+	formatNoteSizeHint,
+	mentionChipLabel,
+	mentionRefKey,
+	mentionRefsEqual,
+	removeWikilinkFromText,
+	syncMentionsFromText,
+	type MentionRef,
+} from '../chat/mention';
+import {
+	applyNoteProposal,
+	computeProposalDiffStats,
+	hasProposalBlock,
+	parseNoteProposal,
+	shouldRequestProposal,
+	stripProposalBlock,
+} from '../chat/note-proposal';
 import { planAnswer, type AnswerMode } from '../chat/planner';
 import { openSavedAnswer, saveAnswerToVault } from '../chat/save-answer';
 import {
 	slimEvidence,
 	type AssistantTurn,
 	type EvidenceRef,
+	type NoteProposal,
 	type ThreadMessage,
 } from '../chat/types';
 import { OpenRouterError, streamChat, type ChatMessage } from '../openrouter/client';
@@ -28,23 +47,35 @@ import {
 	mergeUsage,
 	type TokenUsage,
 } from '../openrouter/usage';
-import { buildConversationPrompt, buildSystemPrompt } from '../prompt/builder';
+import {
+	buildAttachedNoteEditPrompt,
+	buildAttachedNotePrompt,
+	buildConversationPrompt,
+	buildSystemPrompt,
+} from '../prompt/builder';
 import {
 	findSkill,
 	skillPromptSection,
 } from '../skills/loader';
-import { parseSkillSlash } from '../skills/slash';
+import { parseSkillSlash, stripSkillSlashPrefix, ambiguousSkillMatches } from '../skills/slash';
 import type { VaultSkill } from '../skills/types';
+import { skillAllowsEdits } from '../skills/types';
 import { wireInternalLinks } from './link-handler';
 import {
-	applySkillSlashPick,
+	applyMentionMenuPick,
+	MentionMenu,
+} from './mention-menu';
+import {
 	SkillSlashMenu,
 } from './skill-slash-menu';
+import { SkillPicker } from './skill-picker';
+import { SkillPreviewModal } from './skill-preview-modal';
 import {
 	renderBubbleMarkdown,
 	setBubblePlainText,
 } from './markdown-bubble';
 import type { AttachedNote } from '../chat/attached-note';
+import { stripFrontmatter } from '../index/chunker';
 import { evidenceListLine } from '../vault/links';
 
 export const VIEW_TYPE_GROUNDED_CHAT = 'grounded-chat';
@@ -65,11 +96,13 @@ export class ChatView extends ItemView {
 	private sendBtn!: HTMLButtonElement;
 	private stopBtn!: HTMLButtonElement;
 	private emptyEl!: HTMLElement;
-	private skillSelectEl!: HTMLSelectElement;
+	private skillPicker: SkillPicker | null = null;
 	private usageFooterEl!: HTMLElement;
-	private attachEl!: HTMLElement;
+	private newChatBtn!: HTMLButtonElement;
 	private skillSlashMenu: SkillSlashMenu | null = null;
-	private attachedNotePath: string | null = null;
+	private mentionMenu: MentionMenu | null = null;
+	private contextChipsEl!: HTMLElement;
+	private composerMentions: MentionRef[] = [];
 
 	constructor(leaf: WorkspaceLeaf, plugin: GroundedChatPlugin) {
 		super(leaf);
@@ -96,6 +129,27 @@ export class ChatView extends ItemView {
 		return this.lastAssistantTurn !== null;
 	}
 
+	hasLastProposal(): boolean {
+		return Boolean(
+			this.lastAssistantTurn?.proposal && !this.lastAssistantTurn.proposal.applied,
+		);
+	}
+
+	async applyLastProposal(): Promise<void> {
+		for (let i = this.thread.length - 1; i >= 0; i--) {
+			const message = this.thread[i];
+			if (
+				message?.role === 'assistant' &&
+				message.proposal &&
+				!message.proposal.applied
+			) {
+				await this.applyProposalByIndex(i);
+				return;
+			}
+		}
+		new Notice('No pending note proposal.');
+	}
+
 	async saveLastAnswer(): Promise<void> {
 		if (!this.lastAssistantTurn) {
 			return;
@@ -107,32 +161,25 @@ export class ChatView extends ItemView {
 		this.stop();
 		this.thread = [];
 		this.lastAssistantTurn = null;
+		this.composerMentions = [];
+		await this.deactivateSkill();
+		void this.renderContextChips();
 		this.messagesEl.empty();
 		this.renderEmpty();
+		this.refreshNewChatUi();
 		this.plugin.sessionUsage = emptyUsage();
 		this.refreshUsageDisplay();
 		await this.plugin.persistChatThread([]);
 	}
 
 	refreshSkillsUi(): void {
-		if (!this.skillSelectEl) {
-			return;
-		}
 		const current = this.plugin.settings.activeSkillId;
-		this.skillSelectEl.empty();
-		this.skillSelectEl.createEl('option', { text: 'None', value: '' });
-		for (const skill of this.plugin.skills) {
-			this.skillSelectEl.createEl('option', {
-				text: skill.name,
-				value: skill.id,
-			});
+		if (current && !findSkill(this.plugin.skills, current)) {
+			this.plugin.settings.activeSkillId = '';
+			void this.plugin.saveSettings();
 		}
-		this.skillSelectEl.value = current;
-		if (this.plugin.skills.length === 0) {
-			this.skillSelectEl.title = `No skills in ${this.plugin.settings.skillsFolder || '.cursor/skills'}`;
-		} else {
-			this.skillSelectEl.title = `${this.plugin.skills.length} skills loaded`;
-		}
+		this.skillPicker?.refresh();
+		void this.renderContextChips();
 	}
 
 	refreshUsageDisplay(): void {
@@ -159,7 +206,17 @@ export class ChatView extends ItemView {
 		this.contentEl.empty();
 		this.contentEl.addClass('gc-root');
 
-		this.bannerEl = this.contentEl.createDiv({ cls: 'gc-banner' });
+		const header = this.contentEl.createDiv({ cls: 'gc-header' });
+		this.bannerEl = header.createDiv({ cls: 'gc-banner' });
+		const headerActions = header.createDiv({ cls: 'gc-header-actions' });
+		this.newChatBtn = headerActions.createEl('button', {
+			cls: 'gc-btn gc-btn-small gc-new-chat-btn',
+			text: 'New chat',
+			attr: {
+				title: 'Clear the thread and start over',
+			},
+		});
+		this.newChatBtn.addEventListener('click', () => void this.clearChat());
 		this.updateBanner();
 		this.unsubIndex = this.plugin.vaultIndex.onChange(() => {
 			this.updateBanner();
@@ -171,54 +228,53 @@ export class ChatView extends ItemView {
 		this.messagesEl = this.contentEl.createDiv({ cls: 'gc-messages' });
 		wireInternalLinks(this.app, this, this.messagesEl, () => this.sourcePath());
 
-		const skillBar = this.contentEl.createDiv({ cls: 'gc-skill-bar' });
-		skillBar.createSpan({ cls: 'gc-skill-label', text: 'Skill' });
-		this.skillSelectEl = skillBar.createEl('select', { cls: 'gc-skill-select' });
-		this.skillSelectEl.addEventListener('change', () => {
-			this.plugin.settings.activeSkillId = this.skillSelectEl.value;
-			void this.plugin.saveSettings();
+		const contextBar = this.contentEl.createDiv({ cls: 'gc-context-bar' });
+
+		const skillGroup = contextBar.createDiv({ cls: 'gc-context-group' });
+		skillGroup.createSpan({ cls: 'gc-context-label', text: 'Skill' });
+		this.skillPicker = new SkillPicker(skillGroup, this.plugin, (skill) => {
+			if (skill) {
+				void this.activateSkill(skill);
+			} else {
+				void this.deactivateSkill();
+			}
 		});
+		this.skillPicker.refresh();
 		void this.plugin.refreshSkills();
 
-		const attachBar = this.contentEl.createDiv({ cls: 'gc-attach-bar' });
-		this.attachEl = attachBar.createDiv({ cls: 'gc-attach-chip' });
-		const attachActiveBtn = attachBar.createEl('button', {
-			cls: 'gc-btn gc-btn-small',
-			text: 'Attach active note',
-		});
-		this.attachActiveBtn = attachActiveBtn;
-		attachActiveBtn.addEventListener('click', () => void this.attachActiveNote());
-		const clearAttachBtn = attachBar.createEl('button', {
-			cls: 'gc-btn gc-btn-small',
-			text: 'Clear',
-		});
-		clearAttachBtn.addEventListener('click', () => this.clearAttachedNote());
-		this.refreshAttachUi();
-
 		const composer = this.contentEl.createDiv({ cls: 'gc-composer' });
+		this.contextChipsEl = composer.createDiv({ cls: 'gc-context-chips' });
+		void this.renderContextChips();
+
 		const inputWrap = composer.createDiv({ cls: 'gc-input-wrap' });
 		this.inputEl = inputWrap.createEl('textarea', {
 			cls: 'gc-input',
 			attr: {
 				rows: '3',
-				placeholder: 'Ask a question or type /skill/',
+				placeholder: 'Ask a question, type /skill/, or @mention a note',
 			},
 		});
+		this.mentionMenu = new MentionMenu(inputWrap, (candidate, ref) => {
+			const atIndex = this.mentionMenu?.getAtIndex() ?? 0;
+			applyMentionMenuPick(this.inputEl, atIndex, candidate);
+			this.addComposerMention(ref);
+		});
 		this.skillSlashMenu = new SkillSlashMenu(inputWrap, (skill) => {
-			applySkillSlashPick(this.inputEl, skill);
+			void this.onSkillSlashPick(skill);
 		});
 		this.inputEl.addEventListener('input', () => {
-			this.skillSlashMenu?.syncInput(
-				this.inputEl.value,
-				this.plugin.skills,
-			);
+			void this.onComposerInput();
 		});
 		this.inputEl.addEventListener('keydown', (event) => {
+			if (this.mentionMenu?.handleKeyDown(event)) {
+				return;
+			}
 			if (this.skillSlashMenu?.handleKeyDown(event)) {
 				return;
 			}
 			if (event.key === 'Enter' && !event.shiftKey) {
 				event.preventDefault();
+				this.mentionMenu?.hide();
 				this.skillSlashMenu?.hide();
 				void this.send();
 			}
@@ -245,11 +301,14 @@ export class ChatView extends ItemView {
 			this.thread = [...this.plugin.chatThread];
 			await this.restoreThread();
 		}
+		this.refreshNewChatUi();
 	}
 
 	async onClose(): Promise<void> {
 		this.clearStreamRenderTimer();
 		this.stop();
+		this.skillPicker?.destroy();
+		this.skillPicker = null;
 		this.unsubIndex?.();
 		this.unsubIndex = null;
 	}
@@ -323,6 +382,15 @@ export class ChatView extends ItemView {
 		this.sendBtn.disabled = busy;
 		this.inputEl.disabled = busy;
 		this.stopBtn.hidden = !busy;
+		this.refreshNewChatUi();
+	}
+
+	private refreshNewChatUi(): void {
+		if (!this.newChatBtn) {
+			return;
+		}
+		const hasThread = this.thread.length > 0;
+		this.newChatBtn.disabled = !hasThread && !this.streaming;
 	}
 
 	private sourcePath(): string {
@@ -359,15 +427,21 @@ export class ChatView extends ItemView {
 	}
 
 	private async restoreThread(): Promise<void> {
-		for (const message of this.thread) {
+		for (let index = 0; index < this.thread.length; index++) {
+			const message = this.thread[index];
+			if (!message) {
+				continue;
+			}
 			if (message.role === 'user') {
-				const row = this.appendBubble('user');
+				const row = this.appendBubble('user', message.skillId);
+				row.dataset.gcThreadIndex = String(index);
 				const body = row.querySelector('.gc-bubble-body') as HTMLElement;
 				await this.renderBubbleBody(body, message.content);
 				continue;
 			}
 
 			const row = this.appendAssistantBubble(message.status ?? null);
+			row.dataset.gcThreadIndex = String(index);
 			if (message.mode) {
 				await this.renderEvidence(
 					row,
@@ -378,6 +452,11 @@ export class ChatView extends ItemView {
 			}
 			const body = row.querySelector('.gc-bubble-body') as HTMLElement;
 			await this.renderBubbleBody(body, message.content);
+			if (message.proposal && !message.proposal.applied) {
+				await this.renderProposalCard(row, index);
+			} else if (message.proposal?.applied) {
+				this.renderAppliedProposalBadge(row);
+			}
 			if (message.usage) {
 				this.renderTokenBadge(row, message.usage, message.skillId);
 			}
@@ -405,6 +484,9 @@ export class ChatView extends ItemView {
 				status: message.status ?? null,
 				searchQuery: message.searchQuery,
 				evidence: message.evidence ?? [],
+				skillId: message.skillId,
+				usage: message.usage,
+				proposal: message.proposal,
 			};
 			break;
 		}
@@ -434,18 +516,27 @@ export class ChatView extends ItemView {
 		}
 
 		const parsed = parseSkillSlash(raw, this.plugin.skills);
+		if (!parsed.skill && raw.startsWith('/')) {
+			const tokenMatch = /^\/([^\s/]+)/.exec(raw);
+			const token = tokenMatch?.[1];
+			if (token) {
+				const matches = ambiguousSkillMatches(token, this.plugin.skills);
+				if (matches.length > 1) {
+					new Notice(
+						`Ambiguous skill: ${matches.map((skill) => skill.name).join(', ')}`,
+					);
+					return;
+				}
+			}
+		}
+
 		if (parsed.skill && !parsed.message) {
 			await this.activateSkill(parsed.skill);
 			this.inputEl.value = '';
 			this.skillSlashMenu?.hide();
-			const attached = this.attachedNotePath
-				? this.noteTitle(this.attachedNotePath)
-				: null;
-			new Notice(
-				attached
-					? `Skill active: ${parsed.skill.name} · attached: ${attached}`
-					: `Skill active: ${parsed.skill.name}. Attach a note to continue.`,
-			);
+			this.mentionMenu?.hide();
+			this.updateComposerPlaceholder();
+			new Notice('Skill active. @mention a note to continue.');
 			return;
 		}
 
@@ -458,29 +549,35 @@ export class ChatView extends ItemView {
 			await this.activateSkill(parsed.skill);
 		}
 
-		let attachedPath = this.attachedNotePath;
-		const leadingLink = parseLeadingNoteLink(text);
-		if (leadingLink.linktext) {
-			const resolved = resolveNoteLink(this.app, leadingLink.linktext);
-			if (resolved) {
-				attachedPath = resolved;
-				this.attachedNotePath = resolved;
-				this.refreshAttachUi();
-				text = leadingLink.message;
-			}
-		}
+		const mentionFromText = resolveNoteMentionPath(this.app, text);
+		const attachedPath =
+			this.composerMentions[0]?.path ?? mentionFromText.path;
 
-		if (!text) {
-			new Notice('Add a message or attach a note.');
+		if (!text && !attachedPath) {
+			new Notice('Add a message or @mention a note.');
 			return;
 		}
 
+		if (mentionFromText.linktext && !mentionFromText.path) {
+			new Notice(`Could not resolve note: ${mentionFromText.linktext}`);
+		}
+
 		this.inputEl.value = '';
+		this.composerMentions = [];
+		void this.renderContextChips();
 		this.skillSlashMenu?.hide();
-		this.thread.push({ role: 'user', content: text });
-		const userRow = this.appendBubble('user');
+		this.mentionMenu?.hide();
+
+		const activeSkill = parsed.skill ?? this.getActiveSkill();
+		this.thread.push({
+			role: 'user',
+			content: text,
+			skillId: activeSkill?.id,
+		});
+		const userRow = this.appendBubble('user', activeSkill?.id);
 		const userBody = userRow.querySelector('.gc-bubble-body') as HTMLElement;
 		await this.renderBubbleBody(userBody, text);
+		this.refreshNewChatUi();
 		await this.plugin.persistChatThread(this.thread);
 
 		const history: ChatMessage[] = this.thread.map((message) => ({
@@ -500,19 +597,31 @@ export class ChatView extends ItemView {
 		let planSearchQuery: string | undefined;
 		let turnUsage: TokenUsage | null = null;
 
-		const activeSkill = parsed.skill ?? this.getActiveSkill();
 		const attachedNote = attachedPath
 			? await loadAttachedNote(this.app, attachedPath)
 			: null;
+		if (attachedNote) {
+			this.renderAttachedBadge(userRow, attachedNote.title);
+		}
 		const attachedSection = attachedNote
 			? attachedNotePromptSection(attachedNote)
 			: undefined;
 		const skillInstructions = activeSkill
 			? skillPromptSection(activeSkill)
 			: undefined;
-		const skillHint = activeSkill
-			? `Active skill "${activeSkill.name}" may require vault search for related links or note content.`
-			: undefined;
+		const skillHint =
+			attachedNote || !activeSkill
+				? undefined
+				: `Active skill "${activeSkill.name}" may require vault search for related links or note content.`;
+		const requestProposal = shouldRequestProposal({
+			attachedNote,
+			skill: activeSkill,
+			userMessage: text,
+		});
+		const streamHistory: ChatMessage[] =
+			attachedNote && shouldIsolateAttachedTurn(text)
+				? [{ role: 'user', content: text }]
+				: history;
 
 		try {
 			const plan = await planAnswer({
@@ -524,9 +633,10 @@ export class ChatView extends ItemView {
 				userMessage: text,
 				history,
 				topK: this.plugin.settings.topK,
-				activePath: this.plugin.activeNotePath(),
+				activePath: attachedNote?.path ?? this.plugin.activeNotePath(),
 				signal: this.abort.signal,
 				skillHint,
+				attachedNote,
 				onStatus: (message) => setBubblePlainText(bodyEl, message),
 			});
 
@@ -555,6 +665,7 @@ export class ChatView extends ItemView {
 					plan.searchQuery,
 					turnUsage,
 					activeSkill?.id,
+					{ attachedNote, requestProposal },
 				);
 				return;
 			}
@@ -566,16 +677,30 @@ export class ChatView extends ItemView {
 							skillInstructions,
 							attachedSection,
 						)
-					: buildConversationPrompt(skillInstructions, attachedSection);
+					: plan.mode === 'attached'
+						? requestProposal
+							? buildAttachedNoteEditPrompt(
+									skillInstructions,
+									attachedSection,
+									attachedNote?.path,
+								)
+							: buildAttachedNotePrompt(
+									skillInstructions,
+									attachedSection,
+								)
+						: buildConversationPrompt(skillInstructions, attachedSection);
 
-			setBubblePlainText(bodyEl, plan.mode === 'vault' ? 'Answering…' : '');
+			setBubblePlainText(
+				bodyEl,
+				plan.mode === 'vault' || plan.mode === 'attached' ? 'Answering…' : '',
+			);
 
 			const stream = await streamChat({
 				apiKey: this.plugin.settings.openRouterApiKey,
 				baseUrl: this.plugin.settings.baseUrl,
 				model: this.plugin.settings.chatModel,
 				systemPrompt,
-				messages: history,
+				messages: streamHistory,
 				signal: this.abort.signal,
 				onDelta: (delta) => {
 					assembled += delta;
@@ -594,6 +719,7 @@ export class ChatView extends ItemView {
 				planSearchQuery,
 				turnUsage,
 				activeSkill?.id,
+				{ attachedNote, requestProposal },
 			);
 		} catch (error) {
 			this.clearStreamRenderTimer();
@@ -609,6 +735,7 @@ export class ChatView extends ItemView {
 						planSearchQuery,
 						turnUsage,
 						activeSkill?.id,
+						{ attachedNote, requestProposal },
 					);
 				} else {
 					setBubblePlainText(bodyEl, '(Stopped)');
@@ -638,10 +765,35 @@ export class ChatView extends ItemView {
 		searchQuery?: string,
 		usage?: TokenUsage | null,
 		skillId?: string,
+		options?: {
+			attachedNote?: AttachedNote | null;
+			requestProposal?: boolean;
+		},
 	): Promise<void> {
 		this.clearStreamRenderTimer();
-		if (content.trim()) {
-			await this.renderBubbleBody(bodyEl, content);
+
+		let displayContent = content;
+		let proposal: NoteProposal | undefined;
+
+		if (options?.requestProposal && options.attachedNote) {
+			const parsed = await parseNoteProposal(
+				this.app,
+				content,
+				options.attachedNote.path,
+			);
+			if (parsed) {
+				proposal = parsed.proposal;
+				displayContent = parsed.displayContent;
+			} else if (hasProposalBlock(content)) {
+				displayContent = stripProposalBlock(content);
+				new Notice(
+					'Edit proposal block found but could not be parsed. Try asking again.',
+				);
+			}
+		}
+
+		if (displayContent.trim()) {
+			await this.renderBubbleBody(bodyEl, displayContent);
 		} else {
 			setBubblePlainText(bodyEl, '(No text in response)');
 		}
@@ -649,7 +801,7 @@ export class ChatView extends ItemView {
 		const status = computeEpistemicStatus({
 			mode,
 			evidenceCount: evidence.length,
-			answerText: content,
+			answerText: displayContent,
 		});
 		this.renderStatusBadge(row, status);
 		this.renderTokenBadge(row, usage ?? null, skillId);
@@ -657,25 +809,33 @@ export class ChatView extends ItemView {
 		const slim = slimEvidence(evidence);
 		const message: ThreadMessage = {
 			role: 'assistant',
-			content,
+			content: displayContent,
 			status: status ?? undefined,
 			mode,
 			searchQuery,
 			evidence: slim,
 			skillId,
 			usage: usage ?? undefined,
+			proposal,
 		};
 		this.thread.push(message);
+		const messageIndex = this.thread.length - 1;
+		row.dataset.gcThreadIndex = String(messageIndex);
+
 		this.lastAssistantTurn = {
 			userQuestion,
-			content,
+			content: displayContent,
 			mode,
 			status,
 			searchQuery,
 			evidence: slim,
 			skillId,
 			usage: usage ?? undefined,
+			proposal,
 		};
+		if (proposal && !proposal.applied) {
+			await this.renderProposalCard(row, messageIndex);
+		}
 		this.attachSaveButton(row, message);
 		this.plugin.addSessionUsage(usage);
 		await this.plugin.persistChatThread(this.thread);
@@ -688,73 +848,197 @@ export class ChatView extends ItemView {
 	private async activateSkill(skill: VaultSkill): Promise<void> {
 		this.plugin.settings.activeSkillId = skill.id;
 		await this.plugin.saveSettings();
-		if (this.skillSelectEl) {
-			this.skillSelectEl.value = skill.id;
-		}
-		if (!this.attachedNotePath) {
-			const active = this.plugin.activeNotePath();
-			if (active) {
-				this.attachedNotePath = active;
-				this.refreshAttachUi();
-			}
-		}
+		this.skillPicker?.refresh();
+		this.updateComposerPlaceholder();
+		void this.renderContextChips();
 	}
 
-	private async attachActiveNote(): Promise<void> {
-		const path = this.plugin.activeNotePath();
-		if (!path) {
-			new Notice(
-				'No recent markdown note found. Open a note in the editor, then attach it.',
-			);
-			return;
-		}
-		this.attachedNotePath = path;
-		this.refreshAttachUi();
-		new Notice(`Attached: ${this.noteTitle(path)}`);
+	private async deactivateSkill(): Promise<void> {
+		this.plugin.settings.activeSkillId = '';
+		await this.plugin.saveSettings();
+		this.skillPicker?.refresh();
+		this.updateComposerPlaceholder();
+		void this.renderContextChips();
 	}
 
-	private clearAttachedNote(): void {
-		this.attachedNotePath = null;
-		this.refreshAttachUi();
+	private async onSkillSlashPick(skill: VaultSkill): Promise<void> {
+		this.inputEl.value = stripSkillSlashPrefix(this.inputEl.value);
+		await this.activateSkill(skill);
+		this.skillSlashMenu?.hide();
+		this.inputEl.focus();
+		const pos = this.inputEl.value.length;
+		this.inputEl.setSelectionRange(pos, pos);
 	}
 
-	private attachActiveBtn!: HTMLButtonElement;
-
-	refreshAttachUi(): void {
-		if (!this.attachEl) {
-			return;
-		}
-		this.attachEl.empty();
-		if (!this.attachedNotePath) {
-			const candidate = this.plugin.activeNotePath();
-			this.attachEl.setText(
-				candidate
-					? `No note attached · candidate: ${this.noteTitle(candidate)}`
-					: 'No note attached',
+	private async onComposerInput(): Promise<void> {
+		const mentionActive = this.mentionMenu?.syncInput(
+			this.inputEl,
+			this.app,
+			this.plugin.activeNotePath(),
+			this.plugin.recentMarkdownPaths(),
+		);
+		if (!mentionActive) {
+			this.skillSlashMenu?.syncInput(
+				this.inputEl.value,
+				this.plugin.skills,
 			);
 		} else {
-			const title = this.noteTitle(this.attachedNotePath);
-			const link = this.attachEl.createEl('a', {
-				cls: 'gc-attach-link internal-link',
-				text: title,
+			this.skillSlashMenu?.hide();
+		}
+		await this.syncComposerMentionsFromText();
+	}
+
+	private addComposerMention(ref: MentionRef): void {
+		if (this.composerMentions.some((existing) => mentionRefsEqual(existing, ref))) {
+			void this.renderContextChips();
+			return;
+		}
+		this.composerMentions.push(ref);
+		void this.renderContextChips();
+	}
+
+	private removeComposerMention(ref: MentionRef): void {
+		this.composerMentions = this.composerMentions.filter(
+			(existing) => !mentionRefsEqual(existing, ref),
+		);
+		this.inputEl.value = removeWikilinkFromText(
+			this.inputEl.value,
+			ref.linktext,
+		);
+		void this.renderContextChips();
+	}
+
+	private async syncComposerMentionsFromText(): Promise<void> {
+		const synced = await syncMentionsFromText(this.app, this.inputEl.value);
+		const keys = new Set(synced.map((ref) => mentionRefKey(ref)));
+		const kept = this.composerMentions.filter((ref) =>
+			keys.has(mentionRefKey(ref)),
+		);
+		for (const ref of synced) {
+			if (!kept.some((existing) => mentionRefsEqual(existing, ref))) {
+				kept.push(ref);
+			}
+		}
+		this.composerMentions = kept;
+		await this.renderContextChips();
+	}
+
+	private async renderContextChips(): Promise<void> {
+		if (!this.contextChipsEl) {
+			return;
+		}
+		this.contextChipsEl.empty();
+
+		const activeSkill = this.getActiveSkill();
+		const hasMentions = this.composerMentions.length > 0;
+		const hasSkill = Boolean(activeSkill);
+
+		if (!hasMentions && !hasSkill) {
+			this.contextChipsEl.addClass('gc-context-chips-hidden');
+			return;
+		}
+
+		this.contextChipsEl.removeClass('gc-context-chips-hidden');
+		this.contextChipsEl.createSpan({
+			cls: 'gc-context-chips-label',
+			text: 'Context',
+		});
+		const row = this.contextChipsEl.createDiv({ cls: 'gc-context-chips-row' });
+
+		if (activeSkill) {
+			const chip = row.createDiv({
+				cls: 'gc-context-chip gc-context-chip-skill',
 			});
-			link.dataset.href = this.attachedNotePath.replace(/\.md$/i, '');
-			link.addEventListener('click', (event) => {
-				event.preventDefault();
-				void this.app.workspace.openLinkText(
-					this.attachedNotePath!.replace(/\.md$/i, ''),
-					'',
-					false,
-				);
+			chip.createSpan({
+				cls: 'gc-context-chip-label',
+				text: activeSkill.name,
+			});
+			const editHint = skillAllowsEdits(activeSkill)
+				? ' · Can propose note edits when a note is attached'
+				: '';
+			chip.title = activeSkill.description
+				? `${activeSkill.description}${editHint}`
+				: activeSkill.name;
+			chip.addEventListener('dblclick', () => {
+				new SkillPreviewModal(this.app, activeSkill).open();
+			});
+			const removeBtn = chip.createEl('button', {
+				cls: 'gc-context-chip-remove',
+				text: '×',
+				attr: { 'aria-label': `Remove ${activeSkill.name}` },
+			});
+			removeBtn.addEventListener('click', () => {
+				void this.deactivateSkill();
 			});
 		}
-		if (this.attachActiveBtn) {
-			const candidate = this.plugin.activeNotePath();
-			this.attachActiveBtn.textContent = candidate
-				? `Attach: ${this.noteTitle(candidate)}`
-				: 'Attach active note';
-			this.attachActiveBtn.disabled = !candidate;
+
+		for (const ref of this.composerMentions) {
+			const chip = row.createDiv({ cls: 'gc-context-chip' });
+			chip.createSpan({
+				cls: 'gc-context-chip-label',
+				text: mentionChipLabel(ref),
+			});
+			const removeBtn = chip.createEl('button', {
+				cls: 'gc-context-chip-remove',
+				text: '×',
+				attr: { 'aria-label': `Remove ${mentionChipLabel(ref)}` },
+			});
+			removeBtn.addEventListener('click', () => {
+				this.removeComposerMention(ref);
+			});
 		}
+
+		if (activeSkill && skillAllowsEdits(activeSkill) && hasMentions) {
+			this.contextChipsEl.createSpan({
+				cls: 'gc-context-hint',
+				text: 'This skill may propose edits. You approve before anything writes to the vault.',
+			});
+		}
+
+		const primary = this.composerMentions[0];
+		if (!primary) {
+			return;
+		}
+		const size = await estimateNoteSize(this.app, primary.path);
+		const hint = formatNoteSizeHint(size);
+		if (hint) {
+			this.contextChipsEl.createSpan({
+				cls: 'gc-context-hint',
+				text: `Grounded to: ${primary.title} · ${hint}`,
+			});
+		} else {
+			this.contextChipsEl.createSpan({
+				cls: 'gc-context-hint',
+				text: `Grounded to: ${mentionChipLabel(primary)}`,
+			});
+		}
+	}
+
+	private updateComposerPlaceholder(): void {
+		if (!this.inputEl) {
+			return;
+		}
+		const skill = this.getActiveSkill();
+		const active = this.plugin.activeNotePath();
+		if (skill && active && !this.inputEl.value.trim()) {
+			const title = this.noteTitle(active);
+			this.inputEl.placeholder = `@${title} to ground this skill`;
+			return;
+		}
+		this.inputEl.placeholder =
+			'Ask a question, type /skill/, or @mention a note';
+	}
+
+	private renderAttachedBadge(row: HTMLElement, title: string): void {
+		const meta = row.querySelector('.gc-meta');
+		if (!meta) {
+			return;
+		}
+		meta.createSpan({
+			cls: 'gc-attached-badge',
+			text: title,
+			attr: { title: 'Attached note for this message' },
+		});
 	}
 
 	private noteTitle(path: string): string {
@@ -798,7 +1082,7 @@ export class ChatView extends ItemView {
 		});
 	}
 
-	private appendBubble(role: 'user' | 'assistant'): HTMLElement {
+	private appendBubble(role: 'user' | 'assistant', skillId?: string): HTMLElement {
 		this.emptyEl.addClass('gc-empty-hidden');
 		const row = this.messagesEl.createDiv({
 			cls: `gc-row gc-row-${role}`,
@@ -810,6 +1094,16 @@ export class ChatView extends ItemView {
 			cls: 'gc-meta-label',
 			text: role === 'user' ? 'You' : 'Model',
 		});
+		if (skillId) {
+			const skill = findSkill(this.plugin.skills, skillId);
+			if (skill) {
+				meta.createSpan({
+					cls: 'gc-skill-badge',
+					text: skill.name,
+					attr: { title: skill.description || skill.name },
+				});
+			}
+		}
 		row.createDiv({ cls: 'gc-bubble-body' });
 		this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
 		return row;
@@ -899,10 +1193,157 @@ export class ChatView extends ItemView {
 		}
 	}
 
+	private async renderProposalCard(
+		row: HTMLElement,
+		messageIndex: number,
+	): Promise<void> {
+		const message = this.thread[messageIndex];
+		const proposal = message?.proposal;
+		if (message?.role !== 'assistant' || !proposal || proposal.applied) {
+			return;
+		}
+
+		row.querySelector('.gc-proposal')?.remove();
+		const card = row.createDiv({ cls: 'gc-proposal' });
+
+		const skill = message.skillId
+			? findSkill(this.plugin.skills, message.skillId)
+			: null;
+		const viaSkill =
+			skill && skillAllowsEdits(skill) ? ` · via ${skill.name}` : '';
+		card.createDiv({
+			cls: 'gc-proposal-label',
+			text: `Proposed edit · ${this.noteTitle(proposal.path)}${viaSkill}`,
+		});
+
+		const beforeBody = await this.readNoteBody(proposal.path);
+		const stats = computeProposalDiffStats(beforeBody, proposal.content);
+		card.createDiv({
+			cls: 'gc-proposal-stats',
+			text: `+${stats.added} / −${stats.removed} lines`,
+		});
+
+		const preview = card.createDiv({
+			cls: 'gc-proposal-preview gc-proposal-preview-hidden',
+		});
+		preview.createDiv({ cls: 'gc-proposal-preview-label', text: 'Before' });
+		preview.createEl('pre', {
+			cls: 'gc-proposal-preview-text',
+			text: beforeBody.slice(0, 4000),
+		});
+		preview.createDiv({ cls: 'gc-proposal-preview-label', text: 'After' });
+		preview.createEl('pre', {
+			cls: 'gc-proposal-preview-text',
+			text: proposal.content.slice(0, 4000),
+		});
+
+		const actions = card.createDiv({ cls: 'gc-proposal-actions' });
+		const previewBtn = actions.createEl('button', {
+			cls: 'gc-btn gc-btn-small',
+			text: 'Show preview',
+		});
+		const applyBtn = actions.createEl('button', {
+			cls: 'gc-btn gc-btn-small mod-cta',
+			text: 'Apply to note',
+		});
+		const copyBtn = actions.createEl('button', {
+			cls: 'gc-btn gc-btn-small',
+			text: 'Copy body',
+		});
+		const dismissBtn = actions.createEl('button', {
+			cls: 'gc-btn gc-btn-small',
+			text: 'Dismiss',
+		});
+
+		previewBtn.addEventListener('click', () => {
+			const hidden = preview.hasClass('gc-proposal-preview-hidden');
+			preview.toggleClass('gc-proposal-preview-hidden', !hidden);
+			previewBtn.setText(hidden ? 'Hide preview' : 'Show preview');
+		});
+		applyBtn.addEventListener('click', () =>
+			void this.applyProposalByIndex(messageIndex, row),
+		);
+		copyBtn.addEventListener('click', () => {
+			void navigator.clipboard.writeText(proposal.content);
+			new Notice('Copied proposed body.');
+		});
+		dismissBtn.addEventListener('click', () => card.remove());
+	}
+
+	private renderAppliedProposalBadge(row: HTMLElement): void {
+		row.querySelector('.gc-proposal')?.remove();
+		const card = row.createDiv({
+			cls: 'gc-proposal gc-proposal-applied',
+		});
+		card.createDiv({
+			cls: 'gc-proposal-label',
+			text: 'Applied to note',
+		});
+	}
+
+	private async applyProposalByIndex(
+		messageIndex: number,
+		row?: HTMLElement,
+	): Promise<void> {
+		const message = this.thread[messageIndex];
+		const proposal = message?.proposal;
+		if (message?.role !== 'assistant' || !proposal || proposal.applied) {
+			return;
+		}
+
+		try {
+			const file = await applyNoteProposal(this.app, proposal);
+			const appliedProposal: NoteProposal = { ...proposal, applied: true };
+			this.thread[messageIndex] = {
+				...message,
+				proposal: appliedProposal,
+			};
+			if (this.lastAssistantTurn?.proposal?.path === proposal.path) {
+				this.lastAssistantTurn = {
+					...this.lastAssistantTurn,
+					proposal: appliedProposal,
+				};
+			}
+			await this.plugin.persistChatThread(this.thread);
+
+			const targetRow =
+				row ??
+				this.findRowForThreadIndex(messageIndex);
+			if (targetRow) {
+				this.renderAppliedProposalBadge(targetRow);
+			}
+			new Notice(`Applied to ${file.basename}`);
+			await this.app.workspace.getLeaf(false)?.openFile(file);
+		} catch (error) {
+			new Notice(
+				error instanceof Error ? error.message : 'Could not apply proposal.',
+			);
+		}
+	}
+
+	private findRowForThreadIndex(messageIndex: number): HTMLElement | null {
+		const rows = Array.from(
+			this.messagesEl.querySelectorAll<HTMLElement>('.gc-row'),
+		);
+		return (
+			rows.find((row) => row.dataset.gcThreadIndex === String(messageIndex)) ??
+			null
+		);
+	}
+
+	private async readNoteBody(path: string): Promise<string> {
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) {
+			return '';
+		}
+		const raw = await this.app.vault.cachedRead(file);
+		return stripFrontmatter(raw);
+	}
+
 	private async renderEvidence(
 		row: HTMLElement,
 		evidence: EvidenceRef[] | RetrievedChunk[],
-		mode: 'vault' | 'conversation',
+		mode: AnswerMode,
 		searchQuery?: string,
 		attachedNote?: AttachedNote | null,
 	): Promise<void> {
@@ -928,6 +1369,29 @@ export class ChatView extends ItemView {
 				this.sourcePath(),
 				this,
 			);
+		}
+
+		if (mode === 'attached') {
+			if (evidence.length > 0) {
+				wrap.createDiv({
+					cls: 'gc-evidence-label',
+					text: searchQuery
+						? `Related notes (${evidence.length}) · ${searchQuery}`
+						: `Related notes (${evidence.length})`,
+				});
+				const listEl = wrap.createDiv({
+					cls: 'gc-evidence-list markdown-rendered',
+				});
+				const lines = evidence.map((chunk) => evidenceListLine(chunk));
+				await renderBubbleMarkdown(
+					this.app,
+					listEl,
+					lines.join('\n'),
+					this.sourcePath(),
+					this,
+				);
+			}
+			return;
 		}
 
 		let label = 'From conversation';

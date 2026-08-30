@@ -60,6 +60,55 @@ export function buildSystemPrompt(
 	);
 }
 
+export function buildAttachedNoteEditPrompt(
+	skillInstructions?: string,
+	attachedNoteSection?: string,
+	attachedPath?: string,
+): string {
+	const pathHint = attachedPath
+		? `Use path "${attachedPath}" in the grounded-edit block.`
+		: 'Use the attached note path in the grounded-edit block.';
+	return composePrompt(
+		[
+			'You are a vault assistant.',
+			'Work only on the ATTACHED NOTE above.',
+			'First explain what you changed and why in normal markdown.',
+			'Then emit exactly one fenced code block tagged grounded-edit containing JSON on one line or with escaped newlines in content.',
+			'Use this fence opener exactly: ```grounded-edit',
+			'JSON shape: {"type":"replace_body","path":"…","content":"…"}.',
+			'In content use \\n for line breaks, not literal line breaks inside the JSON string.',
+			'Copy the attached note path exactly into path.',
+			'content must be the full new note body without frontmatter.',
+			pathHint,
+			'Do not claim the note was saved.',
+			'Do not invent facts outside the attached note.',
+			'Match the language of the attached note unless the active skill says otherwise.',
+		].join(' '),
+		skillInstructions,
+		attachedNoteSection,
+	);
+}
+
+export function buildAttachedNotePrompt(
+	skillInstructions?: string,
+	attachedNoteSection?: string,
+): string {
+	return composePrompt(
+		[
+			'You are a vault assistant.',
+			'Work only on the ATTACHED NOTE above.',
+			'Ignore earlier chat messages about other notes.',
+			'Do not mention or summarize notes that are not the attached note.',
+			'If the user asks to improve, re-gist, split, or rewrite, apply that to the attached note only.',
+			'Do not invent facts, quotes, or sources outside the attached note.',
+			'If you need related notes, say so instead of guessing.',
+			'Match the language of the attached note unless the active skill says otherwise.',
+		].join(' '),
+		skillInstructions,
+		attachedNoteSection,
+	);
+}
+
 export function buildConversationPrompt(
 	skillInstructions?: string,
 	attachedNoteSection?: string,

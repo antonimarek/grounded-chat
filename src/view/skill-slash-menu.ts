@@ -1,7 +1,7 @@
 import type { VaultSkill } from '../skills/types';
+import { skillAllowsEdits } from '../skills/types';
 import {
 	filterSkillsForSlash,
-	slashInsert,
 	slashQueryFromInput,
 } from '../skills/slash';
 
@@ -93,36 +93,50 @@ export class SkillSlashMenu {
 
 	private render(): void {
 		this.wrapEl.empty();
+
+		const header = this.wrapEl.createDiv({ cls: 'gc-slash-menu-header' });
+		header.createSpan({ cls: 'gc-slash-menu-title', text: 'Select skill' });
+		header.createSpan({
+			cls: 'gc-slash-menu-hint',
+			text: '↑↓ · Enter · Esc',
+		});
+
+		const list = this.wrapEl.createDiv({ cls: 'gc-slash-menu-list' });
 		for (let i = 0; i < this.items.length; i++) {
 			const skill = this.items[i];
 			if (!skill) {
 				continue;
 			}
-			const row = this.wrapEl.createDiv({
+			const row = list.createDiv({
 				cls: `gc-slash-item${i === this.activeIndex ? ' is-active' : ''}`,
 			});
-			row.createSpan({ cls: 'gc-slash-token', text: `/${skill.id}/` });
-			row.createSpan({ cls: 'gc-slash-name', text: skill.name });
-			if (skill.description) {
-				row.createSpan({
-					cls: 'gc-slash-desc',
-					text: skill.description.slice(0, 120),
+
+			const icon = row.createDiv({ cls: 'gc-slash-item-icon gc-slash-item-icon-skill' });
+			icon.setText('/');
+
+			const body = row.createDiv({ cls: 'gc-slash-item-body' });
+			const titleRow = body.createDiv({ cls: 'gc-slash-item-title-row' });
+			titleRow.createDiv({ cls: 'gc-slash-name', text: skill.name });
+			if (skillAllowsEdits(skill)) {
+				titleRow.createSpan({
+					cls: 'gc-skill-edit-badge',
+					text: 'Edits notes',
 				});
 			}
+
+			const metaParts = [`/${skill.id}/`];
+			if (skill.description) {
+				metaParts.push(skill.description.slice(0, 80));
+			}
+			body.createDiv({
+				cls: 'gc-slash-meta',
+				text: metaParts.join(' · '),
+			});
+
 			row.addEventListener('mousedown', (event) => {
 				event.preventDefault();
 				this.pick(skill);
 			});
 		}
 	}
-}
-
-export function applySkillSlashPick(
-	inputEl: HTMLTextAreaElement,
-	skill: VaultSkill,
-): void {
-	inputEl.value = slashInsert(skill);
-	inputEl.focus();
-	const pos = inputEl.value.length;
-	inputEl.setSelectionRange(pos, pos);
 }

@@ -2,6 +2,14 @@ import type { EpistemicStatus } from './epistemic';
 import type { AnswerMode } from './planner';
 import type { TokenUsage } from '../openrouter/usage';
 
+export interface NoteProposal {
+	type: 'replace_body';
+	path: string;
+	content: string;
+	baseBodyHash: string;
+	applied?: boolean;
+}
+
 export interface EvidenceRef {
 	path: string;
 	title: string;
@@ -17,6 +25,7 @@ export interface ThreadMessage {
 	evidence?: EvidenceRef[];
 	skillId?: string;
 	usage?: TokenUsage;
+	proposal?: NoteProposal;
 }
 
 export interface AssistantTurn {
@@ -28,6 +37,7 @@ export interface AssistantTurn {
 	evidence: EvidenceRef[];
 	skillId?: string;
 	usage?: TokenUsage;
+	proposal?: NoteProposal;
 }
 
 export function slimEvidence(

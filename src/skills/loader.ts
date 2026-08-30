@@ -4,9 +4,15 @@ import { FileSystemAdapter, Notice, type DataAdapter } from 'obsidian';
 import type GroundedChatPlugin from '../main';
 import { parseSkillMarkdownWithBlockDescription, type VaultSkill } from './types';
 
+export interface SkillsLoadResult {
+	skills: VaultSkill[];
+	folderCount: number;
+	skippedCount: number;
+}
+
 export async function loadVaultSkills(
 	plugin: GroundedChatPlugin,
-): Promise<VaultSkill[]> {
+): Promise<SkillsLoadResult> {
 	const folderPath = normalizeFolderPath(
 		plugin.settings.skillsFolder.trim() || '.cursor/skills',
 	);
@@ -22,16 +28,19 @@ export async function loadVaultSkills(
 async function loadSkillsFromFilesystem(
 	adapter: FileSystemAdapter,
 	folderPath: string,
-): Promise<VaultSkill[]> {
+): Promise<SkillsLoadResult> {
 	const skillsDir = adapter.getFullPath(folderPath);
 
 	try {
 		const entries = await fs.readdir(skillsDir, { withFileTypes: true });
 		const skills: VaultSkill[] = [];
+		let folderCount = 0;
+		let skippedCount = 0;
 		for (const entry of entries) {
 			if (!entry.isDirectory() && !entry.isSymbolicLink()) {
 				continue;
 			}
+			folderCount++;
 			const entryName = String(entry.name);
 			const vaultSkillPath = `${folderPath}/${entryName}/SKILL.md`;
 			const diskSkillPath = join(skillsDir, entryName, 'SKILL.md');
@@ -43,43 +52,52 @@ async function loadSkillsFromFilesystem(
 				);
 				if (parsed) {
 					skills.push(parsed);
+				} else {
+					skippedCount++;
 				}
 			} catch (error) {
+				skippedCount++;
 				console.warn(
 					`Grounded Chat: skipped skill folder ${entryName}`,
 					error,
 				);
 			}
 		}
-		return skills.sort((a, b) => a.name.localeCompare(b.name));
+		return {
+			skills: skills.sort((a, b) => a.name.localeCompare(b.name)),
+			folderCount,
+			skippedCount,
+		};
 	} catch (error) {
 		console.warn(
 			`Grounded Chat: skills folder not readable at ${skillsDir}`,
 			error,
 		);
-		return [];
+		return { skills: [], folderCount: 0, skippedCount: 0 };
 	}
 }
 
 async function loadSkillsFromAdapter(
 	adapter: DataAdapter,
 	folderPath: string,
-): Promise<VaultSkill[]> {
+): Promise<SkillsLoadResult> {
 	if (!(await adapter.exists(folderPath))) {
-		return [];
+		return { skills: [], folderCount: 0, skippedCount: 0 };
 	}
 
 	let listing: { folders: string[]; files: string[] };
 	try {
 		listing = await adapter.list(folderPath);
 	} catch {
-		return [];
+		return { skills: [], folderCount: 0, skippedCount: 0 };
 	}
 
 	const skills: VaultSkill[] = [];
+	let skippedCount = 0;
 	for (const name of listing.folders) {
 		const skillPath = `${folderPath}/${name}/SKILL.md`;
 		if (!(await adapter.exists(skillPath))) {
+			skippedCount++;
 			continue;
 		}
 		try {
@@ -87,13 +105,19 @@ async function loadSkillsFromAdapter(
 			const parsed = parseSkillMarkdownWithBlockDescription(skillPath, markdown);
 			if (parsed) {
 				skills.push(parsed);
+			} else {
+				skippedCount++;
 			}
 		} catch {
-			continue;
+			skippedCount++;
 		}
 	}
 
-	return skills.sort((a, b) => a.name.localeCompare(b.name));
+	return {
+		skills: skills.sort((a, b) => a.name.localeCompare(b.name)),
+		folderCount: listing.folders.length,
+		skippedCount,
+	};
 }
 
 function normalizeFolderPath(path: string): string {
@@ -121,13 +145,28 @@ export function skillPromptSection(skill: VaultSkill): string {
 	].filter(Boolean).join('\n');
 }
 
-export function notifySkillsLoaded(skills: VaultSkill[], folderPath: string): void {
+export function notifySkillsLoaded(
+	result: SkillsLoadResult,
+	folderPath: string,
+): void {
+	const { skills, folderCount, skippedCount } = result;
 	if (skills.length === 0) {
+		if (folderCount > 0 && skippedCount > 0) {
+			new Notice(
+				`No valid skills in ${folderPath}. ${skippedCount} folder${skippedCount === 1 ? '' : 's'} skipped (missing or invalid SKILL.md).`,
+				6000,
+			);
+			return;
+		}
 		new Notice(
 			`No skills found in ${folderPath}. Expected subfolders with SKILL.md.`,
 			5000,
 		);
 		return;
 	}
-	new Notice(`Loaded ${skills.length} skill${skills.length === 1 ? '' : 's'}.`, 3000);
+	let message = `Loaded ${skills.length} skill${skills.length === 1 ? '' : 's'}.`;
+	if (skippedCount > 0) {
+		message += ` ${skippedCount} skipped.`;
+	}
+	new Notice(message, 3000);
 }

@@ -7,6 +7,9 @@ export function computeEpistemicStatus(params: {
 	evidenceCount: number;
 	answerText: string;
 }): EpistemicStatus | null {
+	if (params.mode === 'attached') {
+		return 'grounded';
+	}
 	if (params.mode === 'conversation') {
 		return null;
 	}

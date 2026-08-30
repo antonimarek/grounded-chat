@@ -11,6 +11,7 @@ Use GitHub Issues for new ideas. Labels: `mvp`, `phase-2`, `phase-3`, `ux`, `ret
 - Phase 2: local lexical index (MiniSearch), citations, graph expand. Done.
 - Phase 3: epistemic status (`GROUNDED` / `PARTIAL` / `UNCERTAIN`), save-answer command, optional chat persistence. Done.
 - Phase 4: OSS docs, release CI. Done.
+- Note edit proposals: attached note + edit skill or edit intent → structured proposal → explicit **Apply to note**. Done (Phase 1: full body replace).
 
 ## Later (not in MVP)
 
@@ -22,7 +23,7 @@ Use GitHub Issues for new ideas. Labels: `mvp`, `phase-2`, `phase-3`, `ux`, `ret
 - Local models (Ollama).
 - Rerankers.
 - Multi-agent tools and web search.
-- Auto-rewrite or enrich notes (out of product intent unless explicit later).
+- Section-level note edits and inline diff preview (Phase 1 uses full-body replace + Apply).
 - Community Plugin directory submission.
 - Cloud sync of the index (avoid; rebuild per device).
 
@@ -30,6 +31,6 @@ Use GitHub Issues for new ideas. Labels: `mvp`, `phase-2`, `phase-3`, `ux`, `ret
 
 - Do not invent facts that are not in retrieved notes.
 - Show evidence before polish.
-- Do not write notes unless the user runs an explicit command.
+- Do not write notes unless the user applies a proposal or runs an explicit save command.
 - Keep settings few and named in plain language.
 - No paywall.

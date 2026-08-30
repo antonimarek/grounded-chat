@@ -4,7 +4,10 @@ export interface VaultSkill {
 	description: string;
 	body: string;
 	path: string;
+	allowsEdits: boolean;
 }
+
+const EDIT_SKILL_ALLOWLIST = new Set(['conversation-to-obsidian-note']);
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
@@ -20,7 +23,14 @@ export function parseSkillMarkdown(path: string, markdown: string): VaultSkill |
 		return null;
 	}
 
-	return { id, name, description, body, path };
+	return {
+		id,
+		name,
+		description,
+		body,
+		path,
+		allowsEdits: readSkillAllowsEdits(frontmatter, id),
+	};
 }
 
 export function skillIdFromPath(path: string): string {
@@ -83,5 +93,31 @@ export function parseSkillMarkdownWithBlockDescription(
 		return null;
 	}
 
-	return { id, name, description, body, path };
+	return {
+		id,
+		name,
+		description,
+		body,
+		path,
+		allowsEdits: readSkillAllowsEdits(frontmatter, id),
+	};
+}
+
+export function skillAllowsEdits(skill: VaultSkill | null): boolean {
+	if (!skill) {
+		return false;
+	}
+	return skill.allowsEdits || EDIT_SKILL_ALLOWLIST.has(skill.id);
+}
+
+function readSkillAllowsEdits(frontmatter: string, skillId: string): boolean {
+	if (EDIT_SKILL_ALLOWLIST.has(skillId)) {
+		return true;
+	}
+	const editField = readFrontmatterField(frontmatter, 'edit');
+	if (editField && /^(true|yes|1)$/i.test(editField)) {
+		return true;
+	}
+	const modeField = readFrontmatterField(frontmatter, 'mode');
+	return modeField?.toLowerCase() === 'edit';
 }

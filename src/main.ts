@@ -7,7 +7,11 @@ import {
 	GroundedChatSettingTab,
 	GroundedChatSettings,
 } from './settings';
-import { loadVaultSkills, notifySkillsLoaded } from './skills/loader';
+import {
+	loadVaultSkills,
+	notifySkillsLoaded,
+	type SkillsLoadResult,
+} from './skills/loader';
 import type { VaultSkill } from './skills/types';
 import { ChatView, VIEW_TYPE_GROUNDED_CHAT } from './view/ChatView';
 
@@ -94,17 +98,34 @@ export default class GroundedChatPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'apply-last-proposal',
+			name: 'Apply last note proposal',
+			checkCallback: (checking) => {
+				const view = this.getChatView();
+				if (!view?.hasLastProposal()) {
+					return false;
+				}
+				if (!checking) {
+					void view.applyLastProposal();
+				}
+				return true;
+			},
+		});
+
+		this.addCommand({
 			id: 'refresh-skills',
 			name: 'Refresh skills',
 			callback: () => {
-				void this.refreshSkills().then((skills) => {
+				void this.refreshSkills().then((result) => {
 					notifySkillsLoaded(
-						skills,
+						result,
 						this.settings.skillsFolder.trim() || '.cursor/skills',
 					);
 				});
 			},
 		});
+
+		this.registerSkillsWatcher();
 
 		this.addSettingTab(new GroundedChatSettingTab(this.app, this));
 	}
@@ -120,6 +141,34 @@ export default class GroundedChatPlugin extends Plugin {
 			}
 		}
 		return null;
+	}
+
+	recentMarkdownPaths(limit = 6): string[] {
+		const seen = new Set<string>();
+		const paths: string[] = [];
+		const active = this.activeNotePath();
+
+		const add = (path: string | null | undefined): void => {
+			if (!path || seen.has(path) || path === active) {
+				return;
+			}
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (!(file instanceof TFile) || file.extension !== 'md') {
+				return;
+			}
+			seen.add(path);
+			paths.push(path);
+		};
+
+		for (const path of this.app.workspace.getLastOpenFiles()) {
+			if (paths.length >= limit) {
+				break;
+			}
+			add(path);
+		}
+
+		add(this.lastMarkdownPath);
+		return paths.slice(0, limit);
 	}
 
 	activeNotePath(): string | null {
@@ -149,7 +198,6 @@ export default class GroundedChatPlugin extends Plugin {
 	private trackMarkdownPath(file: TFile | null): void {
 		if (file instanceof TFile && file.extension === 'md') {
 			this.lastMarkdownPath = file.path;
-			this.getChatView()?.refreshAttachUi();
 		}
 	}
 
@@ -214,10 +262,72 @@ export default class GroundedChatPlugin extends Plugin {
 		});
 	}
 
-	async refreshSkills(): Promise<VaultSkill[]> {
-		this.skills = await loadVaultSkills(this);
+	async refreshSkills(): Promise<SkillsLoadResult> {
+		const result = await loadVaultSkills(this);
+		this.skills = result.skills;
 		this.getChatView()?.refreshSkillsUi();
-		return this.skills;
+		return result;
+	}
+
+	private registerSkillsWatcher(): void {
+		let debounceTimer: number | null = null;
+		const scheduleRefresh = (): void => {
+			if (debounceTimer !== null) {
+				window.clearTimeout(debounceTimer);
+			}
+			debounceTimer = window.setTimeout(() => {
+				debounceTimer = null;
+				void this.refreshSkills();
+			}, 400);
+		};
+
+		const folder = () =>
+			(this.settings.skillsFolder.trim() || '.cursor/skills').replace(/\/+$/, '');
+
+		this.registerEvent(
+			this.app.vault.on('modify', (file) => {
+				if (!(file instanceof TFile)) {
+					return;
+				}
+				const skillsRoot = folder();
+				if (
+					file.path === `${skillsRoot}/SKILL.md` ||
+					file.path.endsWith('/SKILL.md') && file.path.startsWith(`${skillsRoot}/`)
+				) {
+					scheduleRefresh();
+				}
+			}),
+		);
+
+		this.registerEvent(
+			this.app.vault.on('create', (file) => {
+				if (!(file instanceof TFile)) {
+					return;
+				}
+				const skillsRoot = folder();
+				if (
+					file.path.endsWith('/SKILL.md') &&
+					file.path.startsWith(`${skillsRoot}/`)
+				) {
+					scheduleRefresh();
+				}
+			}),
+		);
+
+		this.registerEvent(
+			this.app.vault.on('delete', (file) => {
+				if (!(file instanceof TFile)) {
+					return;
+				}
+				const skillsRoot = folder();
+				if (
+					file.path.endsWith('/SKILL.md') &&
+					file.path.startsWith(`${skillsRoot}/`)
+				) {
+					scheduleRefresh();
+				}
+			}),
+		);
 	}
 
 	addSessionUsage(usage: TokenUsage | null | undefined): void {

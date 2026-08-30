@@ -42,9 +42,11 @@ The plugin is not in the Obsidian Community Plugin directory yet. Install manual
 6. Optional: **Save last answer to note** command or the download icon on a reply.
 7. Optional: enable **Persist chat** in settings to keep the thread after reload.
 8. Optional: pick a **Skill** from the dropdown (loads `SKILL.md` files from `.cursor/skills/` in your vault).
-9. Token usage shows per reply (↓ prompt · ↑ completion) and session total at the bottom when enabled in settings.
-10. Optional: command **Rebuild index** after you change exclude paths or update the plugin (search tokenization may change).
-9. Optional: command **Clear chat** to reset the thread.
+9. Optional: attach a note, use an edit skill or an edit request (for example `improve the gist`), then review the proposal card and click **Apply to note**.
+10. Token usage shows per reply (↓ prompt · ↑ completion) and session total at the bottom when enabled in settings.
+11. Optional: command **Rebuild index** after you change exclude paths or update the plugin (search tokenization may change).
+12. Optional: **New chat** in the header or command **Clear chat** to reset the thread.
+13. Optional: command **Apply last note proposal** when a pending edit proposal exists.
 
 ## Check it in Obsidian
 
@@ -53,6 +55,7 @@ The plugin is not in the Obsidian Community Plugin directory yet. Install manual
 3. Open chat. Banner should show file and chunk counts.
 4. Ask about a note you know exists. Pass: answer cites that note and the evidence link opens it.
 5. Ask a follow-up about the conversation ("what did I ask?"). Pass: no new vault search, label shows **From conversation**.
+6. Attach a note, run an edit skill, ask to improve the gist. Pass: proposal card appears with **Apply to note**; note updates only after Apply.
 
 ## Develop
 
@@ -86,13 +89,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for pull requests and releases.
 
 ## Skills
 
-Place skills in your vault under `.cursor/skills/<skill-id>/SKILL.md` (folder configurable in settings). Each skill needs YAML frontmatter with `name` and `description`. Select a skill in the chat pane dropdown, or type `/skill-id/` in the input (Cursor-style). Autocomplete appears when you type `/`.
+Place skills in your vault under `.cursor/skills/<skill-id>/SKILL.md` (folder configurable in settings). Each skill needs YAML frontmatter with `name` and `description`. Select a skill in the chat pane dropdown, type `/skill-id/` in the input (Cursor-style), or `@mention` a note to ground the request. Autocomplete appears when you type `/` or `@`.
 
 Examples:
-- `/conversation-to-obsidian-note/` — activate skill (auto-attaches the open editor note)
+- `/conversation-to-obsidian-note/` — activate skill, then `@mention` a note
 - `/conversation-to-obsidian-note/ re-gist this note` — with a message
-- `[[My Note]] summarize the gist` — attach a note inline for one message
-- **Attach active note** button — pin the editor note to the chat
+- `@` — autocomplete notes (active note first) and headings (`@Note#Section`)
+- `[[My Note#Section]] summarize the gist` — inline wikilink attaches that note for one message
+
+Type `@` to open the mention menu. Picked notes appear as context chips above the input and as `[[wikilinks]]` in your message. Each send uses only the mentions in that message (no sticky attachment across turns).
 
 Attached note content is sent to the model as the primary source. Vault search still runs when the skill or question needs related links.
 

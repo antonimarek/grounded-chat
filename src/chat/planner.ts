@@ -1,4 +1,9 @@
 import type { App } from 'obsidian';
+import type { AttachedNote } from './attached-note';
+import {
+	relatedSearchQuery,
+	wantsRelatedNoteSearch,
+} from './attached-note';
 import type { LexicalIndex } from '../index/lexical';
 import type { RetrievedChunk } from '../index/types';
 import {
@@ -14,7 +19,7 @@ import {
 } from '../openrouter/tools';
 import { retrieve } from '../retrieve/retriever';
 
-export type AnswerMode = 'vault' | 'conversation';
+export type AnswerMode = 'vault' | 'conversation' | 'attached';
 
 export interface PlanResult {
 	mode: AnswerMode;
@@ -36,10 +41,15 @@ export interface PlanParams {
 	activePath: string | null;
 	signal: AbortSignal;
 	skillHint?: string;
+	attachedNote?: AttachedNote | null;
 	onStatus?: (message: string) => void;
 }
 
 export async function planAnswer(params: PlanParams): Promise<PlanResult> {
+	if (params.attachedNote) {
+		return planWithAttachedNote(params);
+	}
+
 	const history = params.history.filter(
 		(message) => message.role === 'user' || message.role === 'assistant',
 	);
@@ -99,6 +109,31 @@ export async function planAnswer(params: PlanParams): Promise<PlanResult> {
 		}
 		throw error;
 	}
+}
+
+async function planWithAttachedNote(params: PlanParams): Promise<PlanResult> {
+	const note = params.attachedNote;
+	if (!note) {
+		return { mode: 'attached', evidence: [], usage: null };
+	}
+
+	if (wantsRelatedNoteSearch(params.userMessage)) {
+		const query = relatedSearchQuery(note);
+		params.onStatus?.('Searching related notes…');
+		const evidence = retrieve(params.app, params.lexical, query, {
+			topK: params.topK,
+			activePath: note.path,
+		});
+		return {
+			mode: 'attached',
+			evidence,
+			searchQuery: query,
+			usage: null,
+		};
+	}
+
+	params.onStatus?.('Using attached note…');
+	return { mode: 'attached', evidence: [], usage: null };
 }
 
 function fallbackPlan(params: PlanParams, context: string): PlanResult {

@@ -90,3 +90,27 @@ export function filterSkillsForSlash(
 export function slashInsert(skill: VaultSkill): string {
 	return `/${skill.id}/ `;
 }
+
+/** Remove a leading `/token`, `/token/`, or lone `/` prefix from composer input. */
+export function stripSkillSlashPrefix(value: string): string {
+	const withToken = /^\/([^\s/]+)\/?\s*/.exec(value);
+	if (withToken) {
+		return value.slice(withToken[0].length);
+	}
+	if (value.startsWith('/')) {
+		return value.replace(/^\/\s*/, '');
+	}
+	return value;
+}
+
+export function ambiguousSkillMatches(
+	token: string,
+	skills: VaultSkill[],
+): VaultSkill[] {
+	const lower = token.toLowerCase();
+	return skills.filter(
+		(skill) =>
+			skill.id.toLowerCase().startsWith(lower) ||
+			skill.name.toLowerCase().startsWith(lower),
+	);
+}
