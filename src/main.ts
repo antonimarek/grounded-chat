@@ -7,7 +7,7 @@ import {
 	GroundedChatSettingTab,
 	GroundedChatSettings,
 } from './settings';
-import { loadVaultSkills } from './skills/loader';
+import { loadVaultSkills, notifySkillsLoaded } from './skills/loader';
 import type { VaultSkill } from './skills/types';
 import { ChatView, VIEW_TYPE_GROUNDED_CHAT } from './view/ChatView';
 
@@ -85,7 +85,12 @@ export default class GroundedChatPlugin extends Plugin {
 			id: 'refresh-skills',
 			name: 'Refresh skills',
 			callback: () => {
-				void this.refreshSkills();
+				void this.refreshSkills().then((skills) => {
+					notifySkillsLoaded(
+						skills,
+						this.settings.skillsFolder.trim() || '.cursor/skills',
+					);
+				});
 			},
 		});
 

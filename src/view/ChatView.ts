@@ -113,6 +113,11 @@ export class ChatView extends ItemView {
 			});
 		}
 		this.skillSelectEl.value = current;
+		if (this.plugin.skills.length === 0) {
+			this.skillSelectEl.title = `No skills in ${this.plugin.settings.skillsFolder || '.cursor/skills'}`;
+		} else {
+			this.skillSelectEl.title = `${this.plugin.skills.length} skills loaded`;
+		}
 	}
 
 	refreshUsageDisplay(): void {
