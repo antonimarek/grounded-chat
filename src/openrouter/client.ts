@@ -38,8 +38,8 @@ export async function streamChat(params: StreamChatParams): Promise<void> {
 		headers: {
 			Authorization: `Bearer ${params.apiKey}`,
 			'Content-Type': 'application/json',
-			'HTTP-Referer': 'https://github.com/antonimarek/vault-chat',
-			'X-Title': 'Vault Chat',
+			'HTTP-Referer': 'https://github.com/antonimarek/grounded-chat',
+			'X-Title': 'Grounded Chat',
 		},
 		body: JSON.stringify({
 			model: params.model,

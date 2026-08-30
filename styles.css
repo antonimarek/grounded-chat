@@ -1,4 +1,4 @@
-.vc-root {
+.gc-root {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
@@ -6,7 +6,7 @@
 	gap: 0;
 }
 
-.vc-banner {
+.gc-banner {
 	flex: 0 0 auto;
 	padding: 8px 12px;
 	font-size: var(--font-ui-small);
@@ -15,21 +15,21 @@
 	background: var(--background-secondary);
 }
 
-.vc-empty {
+.gc-empty {
 	padding: 24px 16px;
 	text-align: center;
 	color: var(--text-muted);
 }
 
-.vc-empty-hidden {
+.gc-empty-hidden {
 	display: none;
 }
 
-.vc-empty p {
+.gc-empty p {
 	margin-bottom: 12px;
 }
 
-.vc-messages {
+.gc-messages {
 	flex: 1 1 auto;
 	overflow-y: auto;
 	padding: 12px;
@@ -38,14 +38,14 @@
 	gap: 12px;
 }
 
-.vc-row {
+.gc-row {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
 	max-width: 100%;
 }
 
-.vc-meta {
+.gc-meta {
 	display: flex;
 	align-items: center;
 	gap: 6px;
@@ -53,13 +53,13 @@
 	color: var(--text-muted);
 }
 
-.vc-meta-icon {
+.gc-meta-icon {
 	display: inline-flex;
 	width: 14px;
 	height: 14px;
 }
 
-.vc-bubble-body {
+.gc-bubble-body {
 	white-space: pre-wrap;
 	word-break: break-word;
 	padding: 8px 10px;
@@ -69,11 +69,11 @@
 	line-height: 1.45;
 }
 
-.vc-row-user .vc-bubble-body {
+.gc-row-user .gc-bubble-body {
 	background: var(--background-modifier-hover);
 }
 
-.vc-composer {
+.gc-composer {
 	flex: 0 0 auto;
 	border-top: 1px solid var(--background-modifier-border);
 	padding: 10px 12px 12px;
@@ -83,7 +83,7 @@
 	background: var(--background-primary);
 }
 
-.vc-input {
+.gc-input {
 	width: 100%;
 	resize: none;
 	border-radius: 8px;
@@ -91,12 +91,12 @@
 	font-size: var(--font-ui-small);
 }
 
-.vc-actions {
+.gc-actions {
 	display: flex;
 	justify-content: flex-end;
 	gap: 8px;
 }
 
-.vc-btn {
+.gc-btn {
 	cursor: pointer;
 }

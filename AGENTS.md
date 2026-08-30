@@ -1,13 +1,13 @@
-# Vault Chat — agent notes
+# Grounded Chat — agent notes
 
 Obsidian community plugin. TypeScript source in `src/`. esbuild writes `main.js` at repo root.
 
 - Package manager: npm
-- Plugin id: `vault-chat` (must match the vault plugins folder name)
+- Plugin id: `grounded-chat` (must match the vault plugins folder name)
 - Desktop only for now (`isDesktopOnly: true`)
 - Do not commit `node_modules` or `data.json`
 - `main.js` is gitignored. Publish it through GitHub Releases later
-- Product rules: [ROADMAP.md](ROADMAP.md) and the vault `SYSTEM.md` (do not invent knowledge)
+- Product rules: [ROADMAP.md](ROADMAP.md). Do not invent knowledge that is not in retrieved notes.
 
 ## Commands
 

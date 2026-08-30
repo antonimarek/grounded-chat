@@ -1,8 +1,8 @@
 import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
-import type VaultChatPlugin from '../main';
+import type GroundedChatPlugin from '../main';
 import { OpenRouterError, streamChat, type ChatMessage } from '../openrouter/client';
 
-export const VIEW_TYPE_VAULT_CHAT = 'vault-chat';
+export const VIEW_TYPE_GROUNDED_CHAT = 'grounded-chat';
 
 interface ThreadMessage {
 	role: 'user' | 'assistant';
@@ -10,7 +10,7 @@ interface ThreadMessage {
 }
 
 export class ChatView extends ItemView {
-	plugin: VaultChatPlugin;
+	plugin: GroundedChatPlugin;
 	private thread: ThreadMessage[] = [];
 	private abort: AbortController | null = null;
 	private streaming = false;
@@ -21,13 +21,13 @@ export class ChatView extends ItemView {
 	private stopBtn!: HTMLButtonElement;
 	private emptyEl!: HTMLElement;
 
-	constructor(leaf: WorkspaceLeaf, plugin: VaultChatPlugin) {
+	constructor(leaf: WorkspaceLeaf, plugin: GroundedChatPlugin) {
 		super(leaf);
 		this.plugin = plugin;
 	}
 
 	getViewType(): string {
-		return VIEW_TYPE_VAULT_CHAT;
+		return VIEW_TYPE_GROUNDED_CHAT;
 	}
 
 	getDisplayText(): string {
@@ -40,21 +40,21 @@ export class ChatView extends ItemView {
 
 	async onOpen(): Promise<void> {
 		this.contentEl.empty();
-		this.contentEl.addClass('vc-root');
+		this.contentEl.addClass('gc-root');
 
-		const banner = this.contentEl.createDiv({ cls: 'vc-banner' });
+		const banner = this.contentEl.createDiv({ cls: 'gc-banner' });
 		banner.setText(
 			'Retrieval is off. Answers do not use your notes yet.',
 		);
 
-		this.emptyEl = this.contentEl.createDiv({ cls: 'vc-empty' });
+		this.emptyEl = this.contentEl.createDiv({ cls: 'gc-empty' });
 		this.renderEmpty();
 
-		this.messagesEl = this.contentEl.createDiv({ cls: 'vc-messages' });
+		this.messagesEl = this.contentEl.createDiv({ cls: 'gc-messages' });
 
-		const composer = this.contentEl.createDiv({ cls: 'vc-composer' });
+		const composer = this.contentEl.createDiv({ cls: 'gc-composer' });
 		this.inputEl = composer.createEl('textarea', {
-			cls: 'vc-input',
+			cls: 'gc-input',
 			attr: {
 				rows: '3',
 				placeholder: 'Ask a question',
@@ -67,15 +67,15 @@ export class ChatView extends ItemView {
 			}
 		});
 
-		const actions = composer.createDiv({ cls: 'vc-actions' });
+		const actions = composer.createDiv({ cls: 'gc-actions' });
 		this.sendBtn = actions.createEl('button', {
-			cls: 'vc-btn mod-cta',
+			cls: 'gc-btn mod-cta',
 			text: 'Send',
 		});
 		this.sendBtn.addEventListener('click', () => void this.send());
 
 		this.stopBtn = actions.createEl('button', {
-			cls: 'vc-btn',
+			cls: 'gc-btn',
 			text: 'Stop',
 		});
 		this.stopBtn.hidden = true;
@@ -90,7 +90,7 @@ export class ChatView extends ItemView {
 		this.emptyEl.empty();
 		const key = this.plugin.settings.openRouterApiKey;
 		if (!key) {
-			this.emptyEl.removeClass('vc-empty-hidden');
+			this.emptyEl.removeClass('gc-empty-hidden');
 			this.emptyEl.createEl('p', {
 				text: 'Set an API key in settings to start.',
 			});
@@ -99,7 +99,6 @@ export class ChatView extends ItemView {
 				text: 'Open settings',
 			});
 			btn.addEventListener('click', () => {
-				// Obsidian settings UI is not in the public TypeScript API.
 				const setting = (
 					this.app as unknown as {
 						setting?: {
@@ -113,7 +112,7 @@ export class ChatView extends ItemView {
 			});
 			return;
 		}
-		this.emptyEl.addClass('vc-empty-hidden');
+		this.emptyEl.addClass('gc-empty-hidden');
 	}
 
 	private stop(): void {
@@ -148,7 +147,7 @@ export class ChatView extends ItemView {
 		this.appendBubble('user', text);
 
 		const assistantEl = this.appendBubble('assistant', '');
-		const bodyEl = assistantEl.querySelector('.vc-bubble-body') as HTMLElement;
+		const bodyEl = assistantEl.querySelector('.gc-bubble-body') as HTMLElement;
 		this.setBusy(true);
 		this.abort = new AbortController();
 
@@ -199,18 +198,18 @@ export class ChatView extends ItemView {
 		role: 'user' | 'assistant',
 		content: string,
 	): HTMLElement {
-		this.emptyEl.addClass('vc-empty-hidden');
+		this.emptyEl.addClass('gc-empty-hidden');
 		const row = this.messagesEl.createDiv({
-			cls: `vc-row vc-row-${role}`,
+			cls: `gc-row gc-row-${role}`,
 		});
-		const meta = row.createDiv({ cls: 'vc-meta' });
-		const icon = meta.createSpan({ cls: 'vc-meta-icon' });
+		const meta = row.createDiv({ cls: 'gc-meta' });
+		const icon = meta.createSpan({ cls: 'gc-meta-icon' });
 		setIcon(icon, role === 'user' ? 'user' : 'bot');
 		meta.createSpan({
-			cls: 'vc-meta-label',
+			cls: 'gc-meta-label',
 			text: role === 'user' ? 'You' : 'Model',
 		});
-		const body = row.createDiv({ cls: 'vc-bubble-body' });
+		const body = row.createDiv({ cls: 'gc-bubble-body' });
 		body.setText(content);
 		this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
 		return row;

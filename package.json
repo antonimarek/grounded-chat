@@ -1,7 +1,7 @@
 {
-	"name": "vault-chat",
+	"name": "grounded-chat",
 	"version": "0.1.0",
-	"description": "Obsidian plugin: chat with your notes via OpenRouter. Citation-first. No paywall.",
+	"description": "Obsidian plugin: chat grounded in your notes via OpenRouter. Citation-first. No paywall.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {

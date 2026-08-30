@@ -1,19 +1,19 @@
 import { Plugin } from 'obsidian';
 import {
 	DEFAULT_SETTINGS,
-	VaultChatSettingTab,
-	VaultChatSettings,
+	GroundedChatSettingTab,
+	GroundedChatSettings,
 } from './settings';
-import { ChatView, VIEW_TYPE_VAULT_CHAT } from './view/ChatView';
+import { ChatView, VIEW_TYPE_GROUNDED_CHAT } from './view/ChatView';
 
-export default class VaultChatPlugin extends Plugin {
-	settings!: VaultChatSettings;
+export default class GroundedChatPlugin extends Plugin {
+	settings!: GroundedChatSettings;
 
 	async onload() {
 		await this.loadSettings();
 
 		this.registerView(
-			VIEW_TYPE_VAULT_CHAT,
+			VIEW_TYPE_GROUNDED_CHAT,
 			(leaf) => new ChatView(leaf, this),
 		);
 
@@ -29,14 +29,14 @@ export default class VaultChatPlugin extends Plugin {
 			},
 		});
 
-		this.addSettingTab(new VaultChatSettingTab(this.app, this));
+		this.addSettingTab(new GroundedChatSettingTab(this.app, this));
 	}
 
 	onunload() {}
 
 	async activateView(): Promise<void> {
 		const { workspace } = this.app;
-		const existing = workspace.getLeavesOfType(VIEW_TYPE_VAULT_CHAT);
+		const existing = workspace.getLeavesOfType(VIEW_TYPE_GROUNDED_CHAT);
 		const first = existing[0];
 		if (first) {
 			await workspace.revealLeaf(first);
@@ -47,7 +47,7 @@ export default class VaultChatPlugin extends Plugin {
 			return;
 		}
 		await leaf.setViewState({
-			type: VIEW_TYPE_VAULT_CHAT,
+			type: VIEW_TYPE_GROUNDED_CHAT,
 			active: true,
 		});
 		await workspace.revealLeaf(leaf);
@@ -57,7 +57,7 @@ export default class VaultChatPlugin extends Plugin {
 		this.settings = Object.assign(
 			{},
 			DEFAULT_SETTINGS,
-			(await this.loadData()) as Partial<VaultChatSettings>,
+			(await this.loadData()) as Partial<GroundedChatSettings>,
 		);
 	}
 

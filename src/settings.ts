@@ -1,22 +1,22 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
-import VaultChatPlugin from './main';
+import GroundedChatPlugin from './main';
 
-export interface VaultChatSettings {
+export interface GroundedChatSettings {
 	openRouterApiKey: string;
 	chatModel: string;
 	baseUrl: string;
 }
 
-export const DEFAULT_SETTINGS: VaultChatSettings = {
+export const DEFAULT_SETTINGS: GroundedChatSettings = {
 	openRouterApiKey: '',
 	chatModel: 'deepseek/deepseek-chat',
 	baseUrl: 'https://openrouter.ai/api/v1',
 };
 
-export class VaultChatSettingTab extends PluginSettingTab {
-	plugin: VaultChatPlugin;
+export class GroundedChatSettingTab extends PluginSettingTab {
+	plugin: GroundedChatPlugin;
 
-	constructor(app: App, plugin: VaultChatPlugin) {
+	constructor(app: App, plugin: GroundedChatPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
