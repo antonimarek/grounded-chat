@@ -86,9 +86,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for pull requests and releases.
 
 ## Skills
 
-Place skills in your vault under `.cursor/skills/<skill-id>/SKILL.md` (folder configurable in settings). Each skill needs YAML frontmatter with `name` and `description`. Select a skill in the chat pane to inject its instructions into the system prompt.
+Place skills in your vault under `.cursor/skills/<skill-id>/SKILL.md` (folder configurable in settings). Each skill needs YAML frontmatter with `name` and `description`. Select a skill in the chat pane dropdown, or type `/skill-id/` in the input (Cursor-style). Autocomplete appears when you type `/`.
 
-Example: `conversation-to-obsidian-note` for turning chat into atomic Obsidian notes with vault search for related links.
+Examples:
+- `/conversation-to-obsidian-note/` — activate skill for the session
+- `/conversation-to-obsidian-note/ turn this chat into a gist` — run with a message
 
 ## Privacy
 

@@ -27,8 +27,13 @@ import {
 	findSkill,
 	skillPromptSection,
 } from '../skills/loader';
+import { parseSkillSlash } from '../skills/slash';
 import type { VaultSkill } from '../skills/types';
 import { wireInternalLinks } from './link-handler';
+import {
+	applySkillSlashPick,
+	SkillSlashMenu,
+} from './skill-slash-menu';
 import {
 	renderBubbleMarkdown,
 	setBubblePlainText,
@@ -55,6 +60,7 @@ export class ChatView extends ItemView {
 	private emptyEl!: HTMLElement;
 	private skillSelectEl!: HTMLSelectElement;
 	private usageFooterEl!: HTMLElement;
+	private skillSlashMenu: SkillSlashMenu | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: GroundedChatPlugin) {
 		super(leaf);
@@ -166,16 +172,30 @@ export class ChatView extends ItemView {
 		void this.plugin.refreshSkills();
 
 		const composer = this.contentEl.createDiv({ cls: 'gc-composer' });
-		this.inputEl = composer.createEl('textarea', {
+		const inputWrap = composer.createDiv({ cls: 'gc-input-wrap' });
+		this.inputEl = inputWrap.createEl('textarea', {
 			cls: 'gc-input',
 			attr: {
 				rows: '3',
-				placeholder: 'Ask a question',
+				placeholder: 'Ask a question or type /skill/',
 			},
 		});
+		this.skillSlashMenu = new SkillSlashMenu(inputWrap, (skill) => {
+			applySkillSlashPick(this.inputEl, skill);
+		});
+		this.inputEl.addEventListener('input', () => {
+			this.skillSlashMenu?.syncInput(
+				this.inputEl.value,
+				this.plugin.skills,
+			);
+		});
 		this.inputEl.addEventListener('keydown', (event) => {
+			if (this.skillSlashMenu?.handleKeyDown(event)) {
+				return;
+			}
 			if (event.key === 'Enter' && !event.shiftKey) {
 				event.preventDefault();
+				this.skillSlashMenu?.hide();
 				void this.send();
 			}
 		});
@@ -380,8 +400,8 @@ export class ChatView extends ItemView {
 		if (this.streaming) {
 			return;
 		}
-		const text = this.inputEl.value.trim();
-		if (!text) {
+		const raw = this.inputEl.value.trim();
+		if (!raw) {
 			return;
 		}
 		this.renderEmpty();
@@ -389,7 +409,26 @@ export class ChatView extends ItemView {
 			return;
 		}
 
+		const parsed = parseSkillSlash(raw, this.plugin.skills);
+		if (parsed.skill && !parsed.message) {
+			await this.activateSkill(parsed.skill);
+			this.inputEl.value = '';
+			this.skillSlashMenu?.hide();
+			new Notice(`Skill active: ${parsed.skill.name}`);
+			return;
+		}
+
+		const text = parsed.skill ? parsed.message : raw;
+		if (!text) {
+			return;
+		}
+
+		if (parsed.skill) {
+			await this.activateSkill(parsed.skill);
+		}
+
 		this.inputEl.value = '';
+		this.skillSlashMenu?.hide();
 		this.thread.push({ role: 'user', content: text });
 		const userRow = this.appendBubble('user');
 		const userBody = userRow.querySelector('.gc-bubble-body') as HTMLElement;
@@ -413,7 +452,7 @@ export class ChatView extends ItemView {
 		let planSearchQuery: string | undefined;
 		let turnUsage: TokenUsage | null = null;
 
-		const activeSkill = this.getActiveSkill();
+		const activeSkill = parsed.skill ?? this.getActiveSkill();
 		const skillInstructions = activeSkill
 			? skillPromptSection(activeSkill)
 			: undefined;
@@ -585,6 +624,14 @@ export class ChatView extends ItemView {
 
 	private getActiveSkill(): VaultSkill | null {
 		return findSkill(this.plugin.skills, this.plugin.settings.activeSkillId);
+	}
+
+	private async activateSkill(skill: VaultSkill): Promise<void> {
+		this.plugin.settings.activeSkillId = skill.id;
+		await this.plugin.saveSettings();
+		if (this.skillSelectEl) {
+			this.skillSelectEl.value = skill.id;
+		}
 	}
 
 	private renderTokenBadge(
