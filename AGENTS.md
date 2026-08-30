@@ -6,7 +6,7 @@ Obsidian community plugin. TypeScript source in `src/`. esbuild writes `main.js`
 - Plugin id: `grounded-chat` (must match the vault plugins folder name)
 - Desktop only for now (`isDesktopOnly: true`)
 - Do not commit `node_modules` or `data.json`
-- `main.js` is gitignored. Publish it through GitHub Releases later
+- `main.js` is gitignored. Publish it through GitHub Releases (see [CONTRIBUTING.md](CONTRIBUTING.md))
 - Product rules: [ROADMAP.md](ROADMAP.md). Do not invent knowledge that is not in retrieved notes.
 
 ## Commands
@@ -24,10 +24,13 @@ npm run lint
 src/
   main.ts              # lifecycle
   settings.ts          # key, model, base URL, topK, excludes
-  openrouter/client.ts # streaming chat
+  chat/                # planner, epistemic status, save-answer
+  openrouter/          # streaming chat, tool routing
   view/ChatView.ts     # sidebar chat UI
   index/               # chunker, MiniSearch, IndexedDB, vault watch
-  retrieve/retriever.ts
+  retrieve/            # lexical retriever, query tuning
   prompt/builder.ts
 ```
+
+Contributing and releases: [CONTRIBUTING.md](CONTRIBUTING.md).
 

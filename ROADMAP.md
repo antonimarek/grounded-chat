@@ -10,7 +10,7 @@ Use GitHub Issues for new ideas. Labels: `mvp`, `phase-2`, `phase-3`, `ux`, `ret
 - Phase 1: OpenRouter streaming chat shell (no retrieval). Done.
 - Phase 2: local lexical index (MiniSearch), citations, graph expand. Done.
 - Phase 3: epistemic status (`GROUNDED` / `PARTIAL` / `UNCERTAIN`), save-answer command, optional chat persistence. Done.
-- Phase 4: OSS docs, release CI.
+- Phase 4: OSS docs, release CI. Done.
 
 ## Later (not in MVP)
 
