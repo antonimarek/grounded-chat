@@ -368,6 +368,7 @@ export class ChatView extends ItemView {
 				assembled = plan.directAnswer;
 				await this.finishAssistantMessage(
 					assistantRow,
+					bodyEl,
 					text,
 					assembled,
 					plan.mode,
@@ -397,13 +398,9 @@ export class ChatView extends ItemView {
 				},
 			});
 			this.clearStreamRenderTimer();
-			if (!assembled) {
-				setBubblePlainText(bodyEl, '(No text in response)');
-			} else {
-				await this.renderBubbleBody(bodyEl, assembled);
-			}
 			await this.finishAssistantMessage(
 				assistantRow,
+				bodyEl,
 				text,
 				assembled,
 				planMode,
@@ -416,6 +413,7 @@ export class ChatView extends ItemView {
 				if (assembled) {
 					await this.finishAssistantMessage(
 						assistantRow,
+						bodyEl,
 						text,
 						assembled,
 						planMode,
@@ -442,12 +440,20 @@ export class ChatView extends ItemView {
 
 	private async finishAssistantMessage(
 		row: HTMLElement,
+		bodyEl: HTMLElement,
 		userQuestion: string,
 		content: string,
 		mode: AnswerMode,
 		evidence: RetrievedChunk[],
 		searchQuery?: string,
 	): Promise<void> {
+		this.clearStreamRenderTimer();
+		if (content.trim()) {
+			await this.renderBubbleBody(bodyEl, content);
+		} else {
+			setBubblePlainText(bodyEl, '(No text in response)');
+		}
+
 		const status = computeEpistemicStatus({
 			mode,
 			evidenceCount: evidence.length,
