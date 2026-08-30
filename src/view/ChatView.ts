@@ -15,7 +15,19 @@ import {
 	type ThreadMessage,
 } from '../chat/types';
 import { OpenRouterError, streamChat, type ChatMessage } from '../openrouter/client';
+import {
+	formatTokenCount,
+	formatUsageSummary,
+	emptyUsage,
+	mergeUsage,
+	type TokenUsage,
+} from '../openrouter/usage';
 import { buildConversationPrompt, buildSystemPrompt } from '../prompt/builder';
+import {
+	findSkill,
+	skillPromptSection,
+} from '../skills/loader';
+import type { VaultSkill } from '../skills/types';
 import { wireInternalLinks } from './link-handler';
 import {
 	renderBubbleMarkdown,
@@ -40,6 +52,8 @@ export class ChatView extends ItemView {
 	private sendBtn!: HTMLButtonElement;
 	private stopBtn!: HTMLButtonElement;
 	private emptyEl!: HTMLElement;
+	private skillSelectEl!: HTMLSelectElement;
+	private usageFooterEl!: HTMLElement;
 
 	constructor(leaf: WorkspaceLeaf, plugin: GroundedChatPlugin) {
 		super(leaf);
@@ -79,7 +93,45 @@ export class ChatView extends ItemView {
 		this.lastAssistantTurn = null;
 		this.messagesEl.empty();
 		this.renderEmpty();
+		this.plugin.sessionUsage = emptyUsage();
+		this.refreshUsageDisplay();
 		await this.plugin.persistChatThread([]);
+	}
+
+	refreshSkillsUi(): void {
+		if (!this.skillSelectEl) {
+			return;
+		}
+		const current = this.plugin.settings.activeSkillId;
+		this.skillSelectEl.empty();
+		this.skillSelectEl.createEl('option', { text: 'None', value: '' });
+		for (const skill of this.plugin.skills) {
+			this.skillSelectEl.createEl('option', {
+				text: skill.name,
+				value: skill.id,
+			});
+		}
+		this.skillSelectEl.value = current;
+	}
+
+	refreshUsageDisplay(): void {
+		if (!this.usageFooterEl) {
+			return;
+		}
+		if (!this.plugin.settings.showTokenUsage) {
+			this.usageFooterEl.setText('');
+			this.usageFooterEl.addClass('gc-usage-hidden');
+			return;
+		}
+		this.usageFooterEl.removeClass('gc-usage-hidden');
+		const usage = this.plugin.sessionUsage;
+		if (usage.totalTokens <= 0) {
+			this.usageFooterEl.setText('Session tokens: —');
+			return;
+		}
+		this.usageFooterEl.setText(
+			`Session tokens: ↓${formatTokenCount(usage.promptTokens)} ↑${formatTokenCount(usage.completionTokens)} (${formatTokenCount(usage.totalTokens)} total)`,
+		);
 	}
 
 	async onOpen(): Promise<void> {
@@ -97,6 +149,15 @@ export class ChatView extends ItemView {
 
 		this.messagesEl = this.contentEl.createDiv({ cls: 'gc-messages' });
 		wireInternalLinks(this.app, this, this.messagesEl, () => this.sourcePath());
+
+		const skillBar = this.contentEl.createDiv({ cls: 'gc-skill-bar' });
+		skillBar.createSpan({ cls: 'gc-skill-label', text: 'Skill' });
+		this.skillSelectEl = skillBar.createEl('select', { cls: 'gc-skill-select' });
+		this.skillSelectEl.addEventListener('change', () => {
+			this.plugin.settings.activeSkillId = this.skillSelectEl.value;
+			void this.plugin.saveSettings();
+		});
+		this.refreshSkillsUi();
 
 		const composer = this.contentEl.createDiv({ cls: 'gc-composer' });
 		this.inputEl = composer.createEl('textarea', {
@@ -126,6 +187,9 @@ export class ChatView extends ItemView {
 		});
 		this.stopBtn.hidden = true;
 		this.stopBtn.addEventListener('click', () => this.stop());
+
+		this.usageFooterEl = this.contentEl.createDiv({ cls: 'gc-usage-footer' });
+		this.refreshUsageDisplay();
 
 		if (this.plugin.settings.persistChat && this.plugin.chatThread.length > 0) {
 			this.thread = [...this.plugin.chatThread];
@@ -264,6 +328,9 @@ export class ChatView extends ItemView {
 			}
 			const body = row.querySelector('.gc-bubble-body') as HTMLElement;
 			await this.renderBubbleBody(body, message.content);
+			if (message.usage) {
+				this.renderTokenBadge(row, message.usage, message.skillId);
+			}
 			this.attachSaveButton(row, message);
 		}
 		this.rebuildLastAssistantTurn();
@@ -338,6 +405,15 @@ export class ChatView extends ItemView {
 		let planMode: AnswerMode = 'conversation';
 		let planEvidence: RetrievedChunk[] = [];
 		let planSearchQuery: string | undefined;
+		let turnUsage: TokenUsage | null = null;
+
+		const activeSkill = this.getActiveSkill();
+		const skillInstructions = activeSkill
+			? skillPromptSection(activeSkill)
+			: undefined;
+		const skillHint = activeSkill
+			? `Active skill "${activeSkill.name}" may require vault search for related links or note content.`
+			: undefined;
 
 		try {
 			const plan = await planAnswer({
@@ -351,12 +427,14 @@ export class ChatView extends ItemView {
 				topK: this.plugin.settings.topK,
 				activePath: this.plugin.activeNotePath(),
 				signal: this.abort.signal,
+				skillHint,
 				onStatus: (message) => setBubblePlainText(bodyEl, message),
 			});
 
 			planMode = plan.mode;
 			planEvidence = plan.evidence;
 			planSearchQuery = plan.searchQuery;
+			turnUsage = plan.usage;
 
 			await this.renderEvidence(
 				assistantRow,
@@ -375,18 +453,20 @@ export class ChatView extends ItemView {
 					plan.mode,
 					plan.evidence,
 					plan.searchQuery,
+					turnUsage,
+					activeSkill?.id,
 				);
 				return;
 			}
 
 			const systemPrompt =
 				plan.mode === 'vault'
-					? buildSystemPrompt(plan.evidence)
-					: buildConversationPrompt();
+					? buildSystemPrompt(plan.evidence, skillInstructions)
+					: buildConversationPrompt(skillInstructions);
 
 			setBubblePlainText(bodyEl, plan.mode === 'vault' ? 'Answering…' : '');
 
-			await streamChat({
+			const stream = await streamChat({
 				apiKey: this.plugin.settings.openRouterApiKey,
 				baseUrl: this.plugin.settings.baseUrl,
 				model: this.plugin.settings.chatModel,
@@ -399,6 +479,7 @@ export class ChatView extends ItemView {
 				},
 			});
 			this.clearStreamRenderTimer();
+			turnUsage = mergeUsage(turnUsage, stream.usage);
 			await this.finishAssistantMessage(
 				assistantRow,
 				bodyEl,
@@ -407,6 +488,8 @@ export class ChatView extends ItemView {
 				planMode,
 				planEvidence,
 				planSearchQuery,
+				turnUsage,
+				activeSkill?.id,
 			);
 		} catch (error) {
 			this.clearStreamRenderTimer();
@@ -420,6 +503,8 @@ export class ChatView extends ItemView {
 						planMode,
 						planEvidence,
 						planSearchQuery,
+						turnUsage,
+						activeSkill?.id,
 					);
 				} else {
 					setBubblePlainText(bodyEl, '(Stopped)');
@@ -447,6 +532,8 @@ export class ChatView extends ItemView {
 		mode: AnswerMode,
 		evidence: RetrievedChunk[],
 		searchQuery?: string,
+		usage?: TokenUsage | null,
+		skillId?: string,
 	): Promise<void> {
 		this.clearStreamRenderTimer();
 		if (content.trim()) {
@@ -461,6 +548,7 @@ export class ChatView extends ItemView {
 			answerText: content,
 		});
 		this.renderStatusBadge(row, status);
+		this.renderTokenBadge(row, usage ?? null, skillId);
 
 		const slim = slimEvidence(evidence);
 		const message: ThreadMessage = {
@@ -470,6 +558,8 @@ export class ChatView extends ItemView {
 			mode,
 			searchQuery,
 			evidence: slim,
+			skillId,
+			usage: usage ?? undefined,
 		};
 		this.thread.push(message);
 		this.lastAssistantTurn = {
@@ -479,9 +569,52 @@ export class ChatView extends ItemView {
 			status,
 			searchQuery,
 			evidence: slim,
+			skillId,
+			usage: usage ?? undefined,
 		};
 		this.attachSaveButton(row, message);
+		this.plugin.addSessionUsage(usage);
 		await this.plugin.persistChatThread(this.thread);
+	}
+
+	private getActiveSkill(): VaultSkill | null {
+		return findSkill(this.plugin.skills, this.plugin.settings.activeSkillId);
+	}
+
+	private renderTokenBadge(
+		row: HTMLElement,
+		usage: TokenUsage | null,
+		skillId?: string,
+	): void {
+		const meta = row.querySelector('.gc-meta');
+		if (!meta) {
+			return;
+		}
+		meta.querySelector('.gc-skill-badge')?.remove();
+		meta.querySelector('.gc-usage-badge')?.remove();
+
+		if (skillId) {
+			const skill = findSkill(this.plugin.skills, skillId);
+			if (skill) {
+				meta.createSpan({
+					cls: 'gc-skill-badge',
+					text: skill.name,
+					attr: { title: skill.description || skill.name },
+				});
+			}
+		}
+
+		if (!this.plugin.settings.showTokenUsage || !usage) {
+			return;
+		}
+		if (usage.totalTokens <= 0 && usage.promptTokens <= 0 && usage.completionTokens <= 0) {
+			return;
+		}
+		meta.createSpan({
+			cls: 'gc-usage-badge',
+			text: formatUsageSummary(usage),
+			attr: { title: 'Prompt ↓ · completion ↑ tokens for this reply' },
+		});
 	}
 
 	private appendBubble(role: 'user' | 'assistant'): HTMLElement {

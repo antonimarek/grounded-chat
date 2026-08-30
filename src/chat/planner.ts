@@ -6,6 +6,7 @@ import {
 	OpenRouterError,
 	type ChatMessage,
 } from '../openrouter/client';
+import type { TokenUsage } from '../openrouter/usage';
 import {
 	parseSearchQuery,
 	ROUTER_SYSTEM,
@@ -20,6 +21,7 @@ export interface PlanResult {
 	evidence: RetrievedChunk[];
 	searchQuery?: string;
 	directAnswer?: string;
+	usage: TokenUsage | null;
 }
 
 export interface PlanParams {
@@ -33,6 +35,7 @@ export interface PlanParams {
 	topK: number;
 	activePath: string | null;
 	signal: AbortSignal;
+	skillHint?: string;
 	onStatus?: (message: string) => void;
 }
 
@@ -41,6 +44,9 @@ export async function planAnswer(params: PlanParams): Promise<PlanResult> {
 		(message) => message.role === 'user' || message.role === 'assistant',
 	);
 	const context = conversationContext(history);
+	const routerSystem = params.skillHint
+		? `${ROUTER_SYSTEM} ${params.skillHint}`
+		: ROUTER_SYSTEM;
 
 	params.onStatus?.('Routing…');
 
@@ -49,7 +55,7 @@ export async function planAnswer(params: PlanParams): Promise<PlanResult> {
 			apiKey: params.apiKey,
 			baseUrl: params.baseUrl,
 			model: params.model,
-			systemPrompt: ROUTER_SYSTEM,
+			systemPrompt: routerSystem,
 			messages: history,
 			signal: params.signal,
 			tools: [SEARCH_VAULT_TOOL],
@@ -68,7 +74,12 @@ export async function planAnswer(params: PlanParams): Promise<PlanResult> {
 					activePath: params.activePath,
 					context,
 				});
-				return { mode: 'vault', evidence, searchQuery: query };
+				return {
+					mode: 'vault',
+					evidence,
+					searchQuery: query,
+					usage: route.usage,
+				};
 			}
 		}
 
@@ -77,10 +88,11 @@ export async function planAnswer(params: PlanParams): Promise<PlanResult> {
 				mode: 'conversation',
 				evidence: [],
 				directAnswer: route.content,
+				usage: route.usage,
 			};
 		}
 
-		return { mode: 'conversation', evidence: [] };
+		return { mode: 'conversation', evidence: [], usage: route.usage };
 	} catch (error) {
 		if ((error as OpenRouterError).name === 'OpenRouterError') {
 			return fallbackPlan(params, context);
@@ -91,7 +103,7 @@ export async function planAnswer(params: PlanParams): Promise<PlanResult> {
 
 function fallbackPlan(params: PlanParams, context: string): PlanResult {
 	if (isLikelyFollowUp(params.userMessage, params.history)) {
-		return { mode: 'conversation', evidence: [] };
+		return { mode: 'conversation', evidence: [], usage: null };
 	}
 
 	params.onStatus?.('Searching vault…');
@@ -105,7 +117,12 @@ function fallbackPlan(params: PlanParams, context: string): PlanResult {
 			context,
 		},
 	);
-	return { mode: 'vault', evidence, searchQuery: params.userMessage };
+	return {
+		mode: 'vault',
+		evidence,
+		searchQuery: params.userMessage,
+		usage: null,
+	};
 }
 
 function conversationContext(history: ChatMessage[]): string {
@@ -143,7 +160,7 @@ function isLikelyFollowUp(
 		/^a co z tym/,
 		/^explain that/,
 		/^what was that/,
-		/^(tak|nie|ok|okay)$/,
+		/^(tak|nie|ok|okay|yes|no)$/,
 	];
 
 	return patterns.some((pattern) => pattern.test(text));

@@ -25,7 +25,8 @@ src/
   main.ts              # lifecycle
   settings.ts          # key, model, base URL, topK, excludes
   chat/                # planner, epistemic status, save-answer
-  openrouter/          # streaming chat, tool routing
+  skills/              # vault SKILL.md loader
+  openrouter/          # streaming chat, tool routing, usage
   view/ChatView.ts     # sidebar chat UI
   index/               # chunker, MiniSearch, IndexedDB, vault watch
   retrieve/            # lexical retriever, query tuning

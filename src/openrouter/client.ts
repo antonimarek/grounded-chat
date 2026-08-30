@@ -1,3 +1,12 @@
+import {
+	mergeUsage,
+	parseUsage,
+	type TokenUsage,
+} from './usage';
+
+export type { TokenUsage } from './usage';
+export { formatUsageSummary, mergeUsage } from './usage';
+
 export interface ChatMessage {
 	role: 'system' | 'user' | 'assistant' | 'tool';
 	content: string;
@@ -12,6 +21,10 @@ export interface StreamChatParams {
 	messages: ChatMessage[];
 	signal: AbortSignal;
 	onDelta: (text: string) => void;
+}
+
+export interface StreamChatResult {
+	usage: TokenUsage | null;
 }
 
 export interface CompleteChatParams {
@@ -34,6 +47,7 @@ export interface ToolCall {
 export interface CompleteChatResult {
 	content: string;
 	toolCalls: ToolCall[];
+	usage: TokenUsage | null;
 }
 
 export class OpenRouterError extends Error {
@@ -89,6 +103,7 @@ export async function completeChat(
 				}>;
 			};
 		}>;
+		usage?: unknown;
 	};
 
 	const message = json.choices?.[0]?.message;
@@ -107,10 +122,11 @@ export async function completeChat(
 	return {
 		content: message?.content?.trim() ?? '',
 		toolCalls,
+		usage: parseUsage(json.usage),
 	};
 }
 
-export async function streamChat(params: StreamChatParams): Promise<void> {
+export async function streamChat(params: StreamChatParams): Promise<StreamChatResult> {
 	const base = params.baseUrl.replace(/\/$/, '');
 	const url = `${base}/chat/completions`;
 	const messages: ChatMessage[] = [
@@ -125,6 +141,7 @@ export async function streamChat(params: StreamChatParams): Promise<void> {
 			model: params.model,
 			messages,
 			stream: true,
+			stream_options: { include_usage: true },
 			temperature: 0.2,
 		}),
 		signal: params.signal,
@@ -142,6 +159,7 @@ export async function streamChat(params: StreamChatParams): Promise<void> {
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = '';
+	let usage: TokenUsage | null = null;
 
 	while (true) {
 		const { done, value } = await reader.read();
@@ -152,12 +170,20 @@ export async function streamChat(params: StreamChatParams): Promise<void> {
 		const lines = buffer.split('\n');
 		buffer = lines.pop() ?? '';
 		for (const line of lines) {
-			const delta = parseSseLine(line);
-			if (delta) {
-				params.onDelta(delta);
+			const parsed = parseSsePayload(line);
+			if (!parsed) {
+				continue;
+			}
+			if (parsed.usage) {
+				usage = mergeUsage(usage, parsed.usage);
+			}
+			if (parsed.delta) {
+				params.onDelta(parsed.delta);
 			}
 		}
 	}
+
+	return { usage };
 }
 
 function buildHeaders(apiKey: string): Record<string, string> {
@@ -169,20 +195,26 @@ function buildHeaders(apiKey: string): Record<string, string> {
 	};
 }
 
-function parseSseLine(line: string): string | null {
+function parseSsePayload(
+	line: string,
+): { delta: string | null; usage: TokenUsage | null } | null {
 	const trimmed = line.trim();
 	if (!trimmed.startsWith('data:')) {
 		return null;
 	}
 	const data = trimmed.slice(5).trim();
 	if (data === '[DONE]') {
-		return null;
+		return { delta: null, usage: null };
 	}
 	try {
 		const json = JSON.parse(data) as {
 			choices?: Array<{ delta?: { content?: string } }>;
+			usage?: unknown;
 		};
-		return json.choices?.[0]?.delta?.content ?? null;
+		return {
+			delta: json.choices?.[0]?.delta?.content ?? null,
+			usage: parseUsage(json.usage),
+		};
 	} catch {
 		return null;
 	}

@@ -9,6 +9,9 @@ export interface GroundedChatSettings {
 	excludeFolders: string;
 	persistChat: boolean;
 	saveAnswerFolder: string;
+	skillsFolder: string;
+	activeSkillId: string;
+	showTokenUsage: boolean;
 }
 
 export const DEFAULT_SETTINGS: GroundedChatSettings = {
@@ -19,6 +22,9 @@ export const DEFAULT_SETTINGS: GroundedChatSettings = {
 	excludeFolders: '',
 	persistChat: false,
 	saveAnswerFolder: 'Grounded Chat/Answers',
+	skillsFolder: '.cursor/skills',
+	activeSkillId: '',
+	showTokenUsage: true,
 };
 
 export class GroundedChatSettingTab extends PluginSettingTab {
@@ -128,6 +134,33 @@ export class GroundedChatSettingTab extends PluginSettingTab {
 						this.plugin.settings.saveAnswerFolder = value.trim();
 						await this.plugin.saveSettings();
 					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Skills folder')
+			.setDesc(
+				'Vault folder with skill subfolders containing SKILL.md (example: .cursor/skills/conversation-to-obsidian-note/SKILL.md).',
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder('.cursor/skills')
+					.setValue(this.plugin.settings.skillsFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.skillsFolder = value.trim();
+						await this.plugin.saveSettings();
+						await this.plugin.refreshSkills();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Show token usage')
+			.setDesc('Show prompt and completion token counts per reply and for the session.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.showTokenUsage).onChange(async (value) => {
+					this.plugin.settings.showTokenUsage = value;
+					await this.plugin.saveSettings();
+					this.plugin.getChatView()?.refreshUsageDisplay();
+				}),
 			);
 	}
 }

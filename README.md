@@ -41,7 +41,9 @@ The plugin is not in the Obsidian Community Plugin directory yet. Install manual
 5. Use **Stop** to cancel a stream.
 6. Optional: **Save last answer to note** command or the download icon on a reply.
 7. Optional: enable **Persist chat** in settings to keep the thread after reload.
-8. Optional: command **Rebuild index** after you change exclude paths or update the plugin (search tokenization may change).
+8. Optional: pick a **Skill** from the dropdown (loads `SKILL.md` files from `.cursor/skills/` in your vault).
+9. Token usage shows per reply (↓ prompt · ↑ completion) and session total at the bottom when enabled in settings.
+10. Optional: command **Rebuild index** after you change exclude paths or update the plugin (search tokenization may change).
 9. Optional: command **Clear chat** to reset the thread.
 
 ## Check it in Obsidian
@@ -81,6 +83,12 @@ In Obsidian: turn off Restricted mode, enable **Grounded Chat**, reload after ch
 Do not copy `node_modules` into the vault. Keep the git repo outside cloud sync when possible.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for pull requests and releases.
+
+## Skills
+
+Place skills in your vault under `.cursor/skills/<skill-id>/SKILL.md` (folder configurable in settings). Each skill needs YAML frontmatter with `name` and `description`. Select a skill in the chat pane to inject its instructions into the system prompt.
+
+Example: `conversation-to-obsidian-note` for turning chat into atomic Obsidian notes with vault search for related links.
 
 ## Privacy
 

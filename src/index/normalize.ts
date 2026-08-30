@@ -6,7 +6,8 @@ export function normalizeTerm(term: string): string {
 		.replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
-const POLISH_SUFFIXES = [
+const STEM_SUFFIXES = [
+	// Polish
 	'owi',
 	'iem',
 	'ami',
@@ -21,26 +22,41 @@ const POLISH_SUFFIXES = [
 	'aniu',
 	'enie',
 	'owac',
-	'ować',
 	'yć',
 	'ić',
+	// English
+	'tion',
+	'ions',
+	'ment',
+	'ness',
+	'able',
+	'ible',
+	'ing',
+	'ed',
+	'es',
+	'ly',
 ];
 
 export function stemVariants(term: string): string[] {
 	const normalized = normalizeTerm(term);
-	if (normalized.length < 4) {
-		return [normalized];
+	if (normalized.length < 3) {
+		return normalized ? [normalized] : [];
 	}
 
 	const variants = new Set<string>([normalized]);
-	for (const suffix of POLISH_SUFFIXES) {
+	for (const suffix of STEM_SUFFIXES) {
 		const stemSuffix = normalizeTerm(suffix);
 		if (
+			stemSuffix.length > 0 &&
 			normalized.endsWith(stemSuffix) &&
 			normalized.length - stemSuffix.length >= 3
 		) {
 			variants.add(normalized.slice(0, -stemSuffix.length));
 		}
+	}
+
+	if (normalized.endsWith('s') && normalized.length >= 4) {
+		variants.add(normalized.slice(0, -1));
 	}
 
 	return [...variants];

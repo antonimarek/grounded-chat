@@ -98,6 +98,55 @@
 	color: var(--text-normal);
 }
 
+.gc-skill-bar {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px 0;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	border-top: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+}
+
+.gc-skill-label {
+	flex: 0 0 auto;
+	user-select: none;
+}
+
+.gc-skill-select {
+	flex: 1 1 auto;
+	max-width: 100%;
+	font-size: var(--font-ui-smaller);
+}
+
+.gc-usage-footer {
+	flex: 0 0 auto;
+	padding: 4px 12px 8px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-primary);
+}
+
+.gc-usage-footer.gc-usage-hidden {
+	display: none;
+}
+
+.gc-usage-badge,
+.gc-skill-badge {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	padding: 1px 6px;
+	border-radius: 4px;
+	background: var(--background-modifier-hover);
+	line-height: 1.4;
+}
+
+.gc-skill-badge {
+	color: var(--text-accent);
+}
+
 .gc-meta-icon {
 	display: inline-flex;
 	width: 14px;

@@ -1,5 +1,6 @@
 import type { EpistemicStatus } from './epistemic';
 import type { AnswerMode } from './planner';
+import type { TokenUsage } from '../openrouter/usage';
 
 export interface EvidenceRef {
 	path: string;
@@ -14,6 +15,8 @@ export interface ThreadMessage {
 	mode?: AnswerMode;
 	searchQuery?: string;
 	evidence?: EvidenceRef[];
+	skillId?: string;
+	usage?: TokenUsage;
 }
 
 export interface AssistantTurn {
@@ -23,6 +26,8 @@ export interface AssistantTurn {
 	status: EpistemicStatus | null;
 	searchQuery?: string;
 	evidence: EvidenceRef[];
+	skillId?: string;
+	usage?: TokenUsage;
 }
 
 export function slimEvidence(
