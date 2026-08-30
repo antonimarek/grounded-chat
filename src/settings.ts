@@ -5,12 +5,16 @@ export interface GroundedChatSettings {
 	openRouterApiKey: string;
 	chatModel: string;
 	baseUrl: string;
+	topK: number;
+	excludeFolders: string;
 }
 
 export const DEFAULT_SETTINGS: GroundedChatSettings = {
 	openRouterApiKey: '',
 	chatModel: 'deepseek/deepseek-chat',
 	baseUrl: 'https://openrouter.ai/api/v1',
+	topK: 8,
+	excludeFolders: '',
 };
 
 export class GroundedChatSettingTab extends PluginSettingTab {
@@ -61,6 +65,33 @@ export class GroundedChatSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.baseUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.baseUrl = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Notes per answer')
+			.setDesc('How many retrieved chunks to send with each question.')
+			.addSlider((slider) =>
+				slider
+					.setLimits(3, 16, 1)
+					.setValue(this.plugin.settings.topK)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.topK = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Exclude folders')
+			.setDesc('One folder path per line. Those notes are not indexed.')
+			.addTextArea((area) =>
+				area
+					.setPlaceholder('Folder path')
+					.setValue(this.plugin.settings.excludeFolders)
+					.onChange(async (value) => {
+						this.plugin.settings.excludeFolders = value;
 						await this.plugin.saveSettings();
 					}),
 			);

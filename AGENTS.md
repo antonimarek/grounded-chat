@@ -23,9 +23,11 @@ npm run lint
 ```
 src/
   main.ts              # lifecycle
-  settings.ts          # key, model, base URL
+  settings.ts          # key, model, base URL, topK, excludes
   openrouter/client.ts # streaming chat
   view/ChatView.ts     # sidebar chat UI
+  index/               # chunker, MiniSearch, IndexedDB, vault watch
+  retrieve/retriever.ts
+  prompt/builder.ts
 ```
 
-Later: `src/index/`, `src/retrieve/`, `src/prompt/`.

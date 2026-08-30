@@ -100,3 +100,23 @@
 .gc-btn {
 	cursor: pointer;
 }
+
+.gc-evidence {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 0 2px;
+}
+
+.gc-evidence-label {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+}
+
+.gc-evidence-link {
+	font-size: var(--font-ui-smaller);
+	text-decoration: none;
+}
+

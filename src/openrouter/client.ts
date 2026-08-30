@@ -7,13 +7,11 @@ export interface StreamChatParams {
 	apiKey: string;
 	baseUrl: string;
 	model: string;
+	systemPrompt: string;
 	messages: ChatMessage[];
 	signal: AbortSignal;
 	onDelta: (text: string) => void;
 }
-
-const DEFAULT_SYSTEM =
-	'You are a vault assistant. Retrieval is not enabled yet. Say so if the user asks about their notes. Be brief. Do not invent citations.';
 
 export class OpenRouterError extends Error {
 	status: number;
@@ -29,8 +27,8 @@ export async function streamChat(params: StreamChatParams): Promise<void> {
 	const base = params.baseUrl.replace(/\/$/, '');
 	const url = `${base}/chat/completions`;
 	const messages: ChatMessage[] = [
-		{ role: 'system', content: DEFAULT_SYSTEM },
-		...params.messages,
+		{ role: 'system', content: params.systemPrompt },
+		...params.messages.filter((message) => message.role !== 'system'),
 	];
 
 	const response = await fetch(url, {

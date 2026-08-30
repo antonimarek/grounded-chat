@@ -1,6 +1,9 @@
 import { ItemView, WorkspaceLeaf, setIcon } from 'obsidian';
 import type GroundedChatPlugin from '../main';
+import type { RetrievedChunk } from '../index/types';
 import { OpenRouterError, streamChat, type ChatMessage } from '../openrouter/client';
+import { buildSystemPrompt } from '../prompt/builder';
+import { retrieve } from '../retrieve/retriever';
 
 export const VIEW_TYPE_GROUNDED_CHAT = 'grounded-chat';
 
@@ -14,7 +17,9 @@ export class ChatView extends ItemView {
 	private thread: ThreadMessage[] = [];
 	private abort: AbortController | null = null;
 	private streaming = false;
+	private unsubIndex: (() => void) | null = null;
 
+	private bannerEl!: HTMLElement;
 	private messagesEl!: HTMLElement;
 	private inputEl!: HTMLTextAreaElement;
 	private sendBtn!: HTMLButtonElement;
@@ -42,10 +47,11 @@ export class ChatView extends ItemView {
 		this.contentEl.empty();
 		this.contentEl.addClass('gc-root');
 
-		const banner = this.contentEl.createDiv({ cls: 'gc-banner' });
-		banner.setText(
-			'Retrieval is off. Answers do not use your notes yet.',
-		);
+		this.bannerEl = this.contentEl.createDiv({ cls: 'gc-banner' });
+		this.updateBanner();
+		this.unsubIndex = this.plugin.vaultIndex.onChange(() => {
+			this.updateBanner();
+		});
 
 		this.emptyEl = this.contentEl.createDiv({ cls: 'gc-empty' });
 		this.renderEmpty();
@@ -84,6 +90,28 @@ export class ChatView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.stop();
+		this.unsubIndex?.();
+		this.unsubIndex = null;
+	}
+
+	private updateBanner(): void {
+		const status = this.plugin.vaultIndex.status;
+		if (this.bannerEl === undefined) {
+			return;
+		}
+		if (status.indexing) {
+			this.bannerEl.setText(
+				`Indexing notes… ${status.files} files, ${status.chunks} chunks.`,
+			);
+			return;
+		}
+		if (!status.ready) {
+			this.bannerEl.setText('Preparing local note index.');
+			return;
+		}
+		this.bannerEl.setText(
+			`Answers use retrieved notes. ${status.files} files, ${status.chunks} chunks.`,
+		);
 	}
 
 	private renderEmpty(): void {
@@ -146,15 +174,27 @@ export class ChatView extends ItemView {
 		this.thread.push({ role: 'user', content: text });
 		this.appendBubble('user', text);
 
+		const evidence = retrieve(
+			this.app,
+			this.plugin.vaultIndex.lexical,
+			text,
+			{
+				topK: this.plugin.settings.topK,
+				activePath: this.plugin.activeNotePath(),
+			},
+		);
+		const systemPrompt = buildSystemPrompt(evidence);
+
 		const assistantEl = this.appendBubble('assistant', '');
 		const bodyEl = assistantEl.querySelector('.gc-bubble-body') as HTMLElement;
+		this.renderEvidence(assistantEl, evidence);
 		this.setBusy(true);
 		this.abort = new AbortController();
 
 		let assembled = '';
-		const history: ChatMessage[] = this.thread.map((m) => ({
-			role: m.role,
-			content: m.content,
+		const history: ChatMessage[] = this.thread.map((message) => ({
+			role: message.role,
+			content: message.content,
 		}));
 
 		try {
@@ -162,6 +202,7 @@ export class ChatView extends ItemView {
 				apiKey: this.plugin.settings.openRouterApiKey,
 				baseUrl: this.plugin.settings.baseUrl,
 				model: this.plugin.settings.chatModel,
+				systemPrompt,
 				messages: history,
 				signal: this.abort.signal,
 				onDelta: (delta) => {
@@ -209,9 +250,30 @@ export class ChatView extends ItemView {
 			cls: 'gc-meta-label',
 			text: role === 'user' ? 'You' : 'Model',
 		});
-		const body = row.createDiv({ cls: 'gc-bubble-body' });
-		body.setText(content);
+		row.createDiv({ cls: 'gc-bubble-body' }).setText(content);
 		this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
 		return row;
+	}
+
+	private renderEvidence(row: HTMLElement, evidence: RetrievedChunk[]): void {
+		const wrap = row.createDiv({ cls: 'gc-evidence' });
+		wrap.createDiv({
+			cls: 'gc-evidence-label',
+			text: evidence.length > 0 ? 'Evidence' : 'No matching notes',
+		});
+		if (evidence.length === 0) {
+			return;
+		}
+		for (const chunk of evidence) {
+			const link = wrap.createEl('a', {
+				cls: 'gc-evidence-link internal-link',
+				text: `${chunk.title} › ${chunk.heading}`,
+			});
+			link.href = '#';
+			link.addEventListener('click', (event) => {
+				event.preventDefault();
+				void this.app.workspace.openLinkText(chunk.path, '/', false);
+			});
+		}
 	}
 }

@@ -1,4 +1,5 @@
-import { Plugin } from 'obsidian';
+import { MarkdownView, Plugin } from 'obsidian';
+import { VaultIndex } from './index/vault-index';
 import {
 	DEFAULT_SETTINGS,
 	GroundedChatSettingTab,
@@ -8,9 +9,14 @@ import { ChatView, VIEW_TYPE_GROUNDED_CHAT } from './view/ChatView';
 
 export default class GroundedChatPlugin extends Plugin {
 	settings!: GroundedChatSettings;
+	vaultIndex!: VaultIndex;
 
 	async onload() {
 		await this.loadSettings();
+
+		this.vaultIndex = new VaultIndex(this.app, () => this.settings);
+		this.addChild(this.vaultIndex);
+		void this.vaultIndex.start();
 
 		this.registerView(
 			VIEW_TYPE_GROUNDED_CHAT,
@@ -29,10 +35,23 @@ export default class GroundedChatPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: 'rebuild-index',
+			name: 'Rebuild index',
+			callback: () => {
+				void this.vaultIndex.rebuild();
+			},
+		});
+
 		this.addSettingTab(new GroundedChatSettingTab(this.app, this));
 	}
 
 	onunload() {}
+
+	activeNotePath(): string | null {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		return view?.file?.path ?? null;
+	}
 
 	async activateView(): Promise<void> {
 		const { workspace } = this.app;
